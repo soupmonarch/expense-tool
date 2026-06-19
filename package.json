@@ -1,6 +1,6 @@
 {
   "name": "expense-claim-tool",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "private": true,
   "description": "Card statement -> Expense & Travel claim form generator (rule-first + AI fallback)",
   "scripts": {
@@ -9,7 +9,7 @@
     "start": "next start"
   },
   "dependencies": {
-    "next": "14.2.32",
+    "next": "^14.2.32",
     "react": "18.3.1",
     "react-dom": "18.3.1",
     "exceljs": "4.4.0",
