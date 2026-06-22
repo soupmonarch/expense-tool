@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState, type CSSProperties } from "react";
+import { EXPENSE_CATEGORIES, TRAVEL_CATEGORIES } from "@/lib/categories";
 
 interface Entry {
   merchant: string;
@@ -13,6 +14,32 @@ function csvCell(v: string): string {
   return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
 }
 
+function CategorySelect(props: {
+  value: string;
+  onChange: (v: string) => void;
+  style?: CSSProperties;
+}) {
+  return (
+    <select style={props.style} value={props.value} onChange={(e) => props.onChange(e.target.value)}>
+      <option value="">분류 선택…</option>
+      <optgroup label="Expense">
+        {EXPENSE_CATEGORIES.map((c) => (
+          <option key={c} value={c}>
+            {c}
+          </option>
+        ))}
+      </optgroup>
+      <optgroup label="Travel">
+        {TRAVEL_CATEGORIES.map((c) => (
+          <option key={c} value={c}>
+            {c}
+          </option>
+        ))}
+      </optgroup>
+    </select>
+  );
+}
+
 export default function LearnedPage() {
   const [entries, setEntries] = useState<Entry[]>([]);
   const [loading, setLoading] = useState(true);
@@ -20,6 +47,16 @@ export default function LearnedPage() {
   const [persistent, setPersistent] = useState(false);
   const [q, setQ] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+
+  // 추가 폼
+  const [addMerchant, setAddMerchant] = useState("");
+  const [addCategory, setAddCategory] = useState("");
+
+  // 인라인 수정
+  const [editKey, setEditKey] = useState<string | null>(null);
+  const [editMerchant, setEditMerchant] = useState("");
+  const [editCategory, setEditCategory] = useState("");
 
   async function load() {
     setLoading(true);
@@ -51,6 +88,61 @@ export default function LearnedPage() {
 
   const expenseCount = entries.filter((e) => e.group === "expense").length;
   const travelCount = entries.filter((e) => e.group === "travel").length;
+
+  async function addEntry() {
+    const merchant = addMerchant.trim();
+    if (!merchant || !addCategory) {
+      alert("가맹점명과 분류를 모두 입력해 주세요.");
+      return;
+    }
+    setSaving(true);
+    try {
+      const res = await fetch("/api/learn", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ merchant, category: addCategory }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error || "추가 실패");
+      setAddMerchant("");
+      setAddCategory("");
+      await load();
+    } catch (e: any) {
+      alert(e?.message || "추가 실패");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  function startEdit(e: Entry) {
+    setEditKey(e.merchant);
+    setEditMerchant(e.merchant);
+    setEditCategory(e.category);
+  }
+
+  async function saveEdit(oldMerchant: string) {
+    const merchant = editMerchant.trim();
+    if (!merchant || !editCategory) {
+      alert("가맹점명과 분류를 모두 입력해 주세요.");
+      return;
+    }
+    setSaving(true);
+    try {
+      const res = await fetch("/api/learn", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ oldMerchant, merchant, category: editCategory }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error || "수정 실패");
+      setEditKey(null);
+      await load();
+    } catch (e: any) {
+      alert(e?.message || "수정 실패");
+    } finally {
+      setSaving(false);
+    }
+  }
 
   async function remove(merchant: string) {
     if (!confirm(merchant + " 항목을 학습 데이터에서 삭제할까요? 모든 사용자에게 적용됩니다.")) return;
@@ -91,7 +183,7 @@ export default function LearnedPage() {
         <a href="/" style={back}>← 메인으로</a>
         <h1 style={title}>학습된 분류 데이터</h1>
         <p style={subtitle}>
-          검토 팝업에서 “학습”을 체크해 확정한 가맹점 → 분류 매핑입니다.
+          가맹점 → 분류 매핑을 직접 추가·수정·삭제할 수 있습니다.
           여기 누적된 데이터는 <b>모든 사용자</b>의 다음 업로드부터 자동 적용됩니다.
         </p>
 
@@ -118,6 +210,25 @@ export default function LearnedPage() {
           </div>
         </div>
 
+        <div style={addBox}>
+          <div style={addTitle}>+ 새 항목 추가</div>
+          <div style={addRow}>
+            <input
+              style={addInput}
+              placeholder="가맹점명 (예: 스타벅스)"
+              value={addMerchant}
+              onChange={(e) => setAddMerchant(e.target.value)}
+            />
+            <CategorySelect value={addCategory} onChange={setAddCategory} style={addSelect} />
+            <button style={addBtn} disabled={saving} onClick={addEntry}>
+              추가
+            </button>
+          </div>
+          <p style={addHint}>
+            가맹점명은 자동으로 정규화되어 저장됩니다(소문자·끝 숫자 제거). 결제대행사명은 추가할 수 없습니다.
+          </p>
+        </div>
+
         <div style={toolbar}>
           <input
             style={searchBox}
@@ -139,7 +250,7 @@ export default function LearnedPage() {
           <p style={errBox}>{error}</p>
         ) : filtered.length === 0 ? (
           <p style={muted}>
-            {entries.length === 0 ? "아직 학습된 데이터가 없습니다." : "검색 결과가 없습니다."}
+            {entries.length === 0 ? "아직 학습된 데이터가 없습니다. 위에서 새 항목을 추가해 보세요." : "검색 결과가 없습니다."}
           </p>
         ) : (
           <table style={table}>
@@ -152,32 +263,76 @@ export default function LearnedPage() {
               </tr>
             </thead>
             <tbody>
-              {filtered.map((e) => (
-                <tr key={e.merchant}>
-                  <td style={td}>{e.merchant}</td>
-                  <td style={tdCat}>{e.category}</td>
-                  <td style={tdC}>
-                    <span style={e.group === "travel" ? tagTravel : tagExpense}>{e.group}</span>
-                  </td>
-                  <td style={tdC}>
-                    <button
-                      style={delBtn}
-                      disabled={busy === e.merchant}
-                      onClick={() => remove(e.merchant)}
-                    >
-                      {busy === e.merchant ? "…" : "삭제"}
-                    </button>
-                  </td>
-                </tr>
-              ))}
+              {filtered.map((e) => {
+                const editing = editKey === e.merchant;
+                return (
+                  <tr key={e.merchant}>
+                    <td style={td}>
+                      {editing ? (
+                        <input
+                          style={cellInput}
+                          value={editMerchant}
+                          onChange={(ev) => setEditMerchant(ev.target.value)}
+                        />
+                      ) : (
+                        e.merchant
+                      )}
+                    </td>
+                    <td style={tdCat}>
+                      {editing ? (
+                        <CategorySelect
+                          value={editCategory}
+                          onChange={setEditCategory}
+                          style={cellSelect}
+                        />
+                      ) : (
+                        e.category
+                      )}
+                    </td>
+                    <td style={tdC}>
+                      {editing ? (
+                        <span style={dash}>—</span>
+                      ) : (
+                        <span style={e.group === "travel" ? tagTravel : tagExpense}>{e.group}</span>
+                      )}
+                    </td>
+                    <td style={tdC}>
+                      {editing ? (
+                        <div style={btnRow}>
+                          <button style={saveBtn} disabled={saving} onClick={() => saveEdit(e.merchant)}>
+                            저장
+                          </button>
+                          <button style={cancelBtn} disabled={saving} onClick={() => setEditKey(null)}>
+                            취소
+                          </button>
+                        </div>
+                      ) : (
+                        <div style={btnRow}>
+                          <button style={editBtn} onClick={() => startEdit(e)}>
+                            수정
+                          </button>
+                          <button
+                            style={delBtn}
+                            disabled={busy === e.merchant}
+                            onClick={() => remove(e.merchant)}
+                          >
+                            {busy === e.merchant ? "…" : "삭제"}
+                          </button>
+                        </div>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         )}
 
         <p style={hint}>
-          팀·지사 전체 개요는 위 수치와 표로 확인하고, 외부 리포팅이 필요하면 CSV로
-          내보낼 수 있습니다. 원본 데이터는 Vercel → Storage → KV(Upstash) 데이터
-          브라우저의 해시 <code>expense_merchant_categories</code> 에서도 볼 수 있습니다.
+          수정은 분류뿐 아니라 가맹점명도 바꿀 수 있습니다(이름을 바꿀 경우 기존 항목은
+          자동으로 옮겨집니다). 모든 변경은 공유 저장소에 즉시 반영되어 전체 사용자에게
+          적용됩니다. 원본 데이터는 Vercel → Storage → KV(Upstash) 데이터 브라우저의
+          해시 <code>expense_merchant_categories</code> 에서도 볼 수 있습니다.
         </p>
       </div>
     </main>
@@ -223,6 +378,41 @@ const stat: CSSProperties = {
 };
 const statN: CSSProperties = { fontSize: 22, fontWeight: 700 };
 const statL: CSSProperties = { fontSize: 12, color: "#6b7280", marginTop: 2 };
+const addBox: CSSProperties = {
+  background: "#f7f9fc",
+  border: "1px solid #e6ebf2",
+  borderRadius: 10,
+  padding: 16,
+  marginBottom: 20,
+};
+const addTitle: CSSProperties = { fontSize: 14, fontWeight: 700, marginBottom: 10, color: "#374151" };
+const addRow: CSSProperties = { display: "flex", gap: 8, flexWrap: "wrap" };
+const addInput: CSSProperties = {
+  flex: "1 1 200px",
+  padding: "9px 12px",
+  border: "1px solid #d9dde3",
+  borderRadius: 8,
+  fontSize: 14,
+};
+const addSelect: CSSProperties = {
+  flex: "1 1 260px",
+  padding: "9px 12px",
+  border: "1px solid #d9dde3",
+  borderRadius: 8,
+  fontSize: 13,
+  background: "#fff",
+};
+const addBtn: CSSProperties = {
+  padding: "9px 20px",
+  border: "none",
+  background: "#2d6cdf",
+  color: "#fff",
+  borderRadius: 8,
+  fontSize: 14,
+  fontWeight: 600,
+  cursor: "pointer",
+};
+const addHint: CSSProperties = { fontSize: 12, color: "#9097a1", marginTop: 8, marginBottom: 0 };
 const toolbar: CSSProperties = { display: "flex", gap: 8, marginBottom: 16 };
 const searchBox: CSSProperties = {
   flex: 1,
@@ -257,9 +447,25 @@ const th: CSSProperties = {
   fontWeight: 600,
 };
 const thC: CSSProperties = { ...th, textAlign: "center" };
-const td: CSSProperties = { padding: "8px 10px", borderBottom: "1px solid #f0f1f3" };
+const td: CSSProperties = { padding: "8px 10px", borderBottom: "1px solid #f0f1f3", verticalAlign: "middle" };
 const tdCat: CSSProperties = { ...td, color: "#374151" };
 const tdC: CSSProperties = { ...td, textAlign: "center" };
+const dash: CSSProperties = { color: "#c0c5cc" };
+const cellInput: CSSProperties = {
+  width: "100%",
+  padding: "6px 8px",
+  border: "1px solid #c7ccd3",
+  borderRadius: 6,
+  fontSize: 13,
+};
+const cellSelect: CSSProperties = {
+  width: "100%",
+  padding: "6px 8px",
+  border: "1px solid #c7ccd3",
+  borderRadius: 6,
+  fontSize: 12,
+  background: "#fff",
+};
 const tagBase: CSSProperties = {
   display: "inline-block",
   fontSize: 11,
@@ -269,11 +475,39 @@ const tagBase: CSSProperties = {
 };
 const tagExpense: CSSProperties = { ...tagBase, background: "#e7f0ff", color: "#2d6cdf" };
 const tagTravel: CSSProperties = { ...tagBase, background: "#fff1e0", color: "#c2710c" };
+const btnRow: CSSProperties = { display: "flex", gap: 6, justifyContent: "center" };
+const editBtn: CSSProperties = {
+  padding: "5px 12px",
+  border: "1px solid #c9d4e6",
+  background: "#fff",
+  color: "#2d6cdf",
+  borderRadius: 7,
+  fontSize: 12,
+  cursor: "pointer",
+};
 const delBtn: CSSProperties = {
   padding: "5px 12px",
   border: "1px solid #f0c2bd",
   background: "#fff",
   color: "#b3261e",
+  borderRadius: 7,
+  fontSize: 12,
+  cursor: "pointer",
+};
+const saveBtn: CSSProperties = {
+  padding: "5px 12px",
+  border: "none",
+  background: "#1e7a3d",
+  color: "#fff",
+  borderRadius: 7,
+  fontSize: 12,
+  cursor: "pointer",
+};
+const cancelBtn: CSSProperties = {
+  padding: "5px 12px",
+  border: "1px solid #d9dde3",
+  background: "#fff",
+  color: "#6b7280",
   borderRadius: 7,
   fontSize: 12,
   cursor: "pointer",
