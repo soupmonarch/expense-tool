@@ -3,7 +3,9 @@
 // 각 영수증의 승인번호 / 가맹점명 / 거래금액을 추출한다.
 // 추출한 승인번호로 카드 승인내역 엑셀의 각 행과 1:1로 매칭한다.
 //
-// pdfjs-dist 는 서버(Node)에서 동작하며, 워커 없이 fake worker 로 실행된다.
+// unpdf 는 serverless(Node/Vercel) 전용으로 빌드된 pdf.js 래퍼라 별도 워커
+// 파일(pdf.worker.js)이 필요 없다. (pdfjs-dist 를 직접 쓰면 serverless 번들에서
+// 'Cannot find module ./pdf.worker.js' 로 실패한다.)
 
 export interface ReceiptInfo {
   page: number; // 0-based 원본 페이지 인덱스
@@ -62,23 +64,24 @@ function extractFields(lines: string[]): {
   return { approval, merchant, amount };
 }
 
-export async function parseReceiptPdf(data: Uint8Array): Promise<ParsedReceipts> {
-  let pdfjs: any;
+export async function parseReceiptPdf(
+  data: Uint8Array,
+): Promise<ParsedReceipts> {
+  let getDocumentProxy: any;
   try {
-    const mod: any = await import("pdfjs-dist/legacy/build/pdf.js");
-    pdfjs = mod && mod.getDocument ? mod : mod.default;
-    try {
-      pdfjs.GlobalWorkerOptions.workerSrc = "";
-    } catch {
-      /* fake worker is fine */
-    }
+    const mod: any = await import("unpdf");
+    getDocumentProxy = mod.getDocumentProxy;
   } catch (e: any) {
-    return { receipts: [], pageCount: 0, error: "pdf 라이브러리 로드 실패: " + (e?.message || e) };
+    return {
+      receipts: [],
+      pageCount: 0,
+      error: "pdf 라이브러리 로드 실패: " + (e?.message || e),
+    };
   }
 
   try {
-    const task = pdfjs.getDocument({ data, useSystemFonts: true, isEvalSupported: false });
-    const doc = await task.promise;
+    // unpdf 는 워커 없이 메인 스레드에서 동작하는 pdf.js 를 내장한다.
+    const doc: any = await getDocumentProxy(data);
     const receipts: ReceiptInfo[] = [];
 
     for (let p = 0; p < doc.numPages; p++) {
@@ -138,6 +141,10 @@ export async function parseReceiptPdf(data: Uint8Array): Promise<ParsedReceipts>
 
     return { receipts, pageCount: doc.numPages };
   } catch (e: any) {
-    return { receipts: [], pageCount: 0, error: "영수증 PDF 파싱 실패: " + (e?.message || e) };
+    return {
+      receipts: [],
+      pageCount: 0,
+      error: "영수증 PDF 파싱 실패: " + (e?.message || e),
+    };
   }
 }
