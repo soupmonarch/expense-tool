@@ -243,6 +243,8 @@ export default function Home() {
           제출 양식을 만들어 ZIP으로 다운로드합니다. 카드사가 달라도 자동 인식합니다.
         </p>
 
+        <a href="/learned" style={navLink}>📚 지금까지 학습된 분류 데이터 보기 · 관리 →</a>
+
         <label
           style={dragOver ? dropActive : drop}
           onDragOver={(e) => {
@@ -447,6 +449,7 @@ const card: CSSProperties = {
 };
 const title: CSSProperties = { fontSize: 22, margin: "0 0 8px" };
 const subtitle: CSSProperties = { fontSize: 14, color: "#5f6873", lineHeight: 1.6, marginBottom: 24 };
+const navLink: CSSProperties = { display: "inline-block", marginBottom: 20, fontSize: 14, color: "#2d6cdf", textDecoration: "none", fontWeight: 600 };
 const drop: CSSProperties = {
   display: "flex",
   alignItems: "center",

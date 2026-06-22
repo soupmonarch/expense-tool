@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { saveLearned, kvEnabled } from "@/lib/store";
-import { ALL_CATEGORIES } from "@/lib/categories";
+import { saveLearned, deleteLearned, getLearnedMap, kvEnabled } from "@/lib/store";
+import { ALL_CATEGORIES, groupOf, type Category } from "@/lib/categories";
 import { isPaymentGateway } from "@/lib/gateways";
 
 export const runtime = "nodejs";
@@ -10,11 +10,24 @@ interface LearnItem {
   category: string;
 }
 
-// Persist user-confirmed merchant -> category mappings to the SHARED store so
-// every future upload (by anyone) classifies that merchant automatically.
-// Payment-gateway merchants are REJECTED here as a safety net: even if the UI
-// somehow sends one, we must never cache a processor name (it means a different
-// purchase every time).
+// GET: 누적된 공유 학습 데이터(가맹점 -> 분류) 전체를 반환한다.
+// 관리 페이지(/learned)에서 조회·검색·CSV 내보내기에 사용.
+export async function GET() {
+  const map = await getLearnedMap();
+  const valid = new Set<string>(ALL_CATEGORIES);
+  const entries = Object.entries(map)
+    .map(([merchant, category]) => ({
+      merchant,
+      category,
+      group: valid.has(category) ? groupOf(category as Category) : "unknown",
+    }))
+    .sort((a, b) => a.merchant.localeCompare(b.merchant, "ko"));
+  return NextResponse.json({ entries, count: entries.length, persistent: kvEnabled() });
+}
+
+// POST: 사용자가 확정한 가맹점 -> 분류 매핑을 공유 저장소에 저장해서 이후 모든
+// 업로드(누구의 것이든)가 그 가맹점을 자동 분류하도록 한다.
+// 결제대행사 가맹점명은 안전장치로 여기서도 거부한다(매번 다른 결제라 학습 금지).
 export async function POST(req: NextRequest) {
   try {
     const body = (await req.json()) as { items?: LearnItem[] };
@@ -37,5 +50,20 @@ export async function POST(req: NextRequest) {
   } catch (err: any) {
     console.error(err);
     return NextResponse.json({ error: err?.message || "Learn failed" }, { status: 500 });
+  }
+}
+
+// DELETE: 공유 저장소에서 매핑 하나를 제거한다(잘못 학습된 항목 수정용).
+export async function DELETE(req: NextRequest) {
+  try {
+    const body = (await req.json()) as { merchant?: string };
+    if (!body?.merchant) {
+      return NextResponse.json({ error: "merchant is required" }, { status: 400 });
+    }
+    await deleteLearned(body.merchant);
+    return NextResponse.json({ ok: true, persistent: kvEnabled() });
+  } catch (err: any) {
+    console.error(err);
+    return NextResponse.json({ error: err?.message || "Delete failed" }, { status: 500 });
   }
 }

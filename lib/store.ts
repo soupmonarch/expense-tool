@@ -52,3 +52,19 @@ export async function saveLearned(merchant: string, category: string): Promise<v
   }
   memory.set(key, category);
 }
+
+// 공유 저장소에서 매핑 하나를 제거한다(관리 페이지에서 잘못 학습된 항목을
+// 모든 사용자 기준으로 바로잡을 때 사용).
+export async function deleteLearned(merchant: string): Promise<void> {
+  const key = normalizeMerchant(merchant);
+  if (!key) return;
+  if (kvEnabled()) {
+    try {
+      await kv.hdel(HASH, key);
+      return;
+    } catch (e) {
+      console.error("KV delete failed, using memory:", e);
+    }
+  }
+  memory.delete(key);
+}
