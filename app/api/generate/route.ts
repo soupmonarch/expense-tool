@@ -112,6 +112,8 @@ export async function POST(req: NextRequest) {
             parsed.receipts.length,
         );
 
+        if (parsed.sample) reportLines.push("", parsed.sample);
+
         if (parsed.error) {
           reportLines.push("⚠️ " + parsed.error);
           zip.file("영수증_리포트.txt", reportLines.join("\n"));
