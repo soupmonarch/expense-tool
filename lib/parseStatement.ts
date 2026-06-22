@@ -25,6 +25,8 @@ const CANCEL_FALLBACK_KEYS = ["부분취소"]; // "부분취소 후 잔액"(금�
 const CURRENCY_KEYS = ["통화", "화폐", "currency", "curr", "ccy"]; // 원 통화(국내/해외 판정용)
 const DATE_KEYS = ["이용일", "이용일자", "승인일", "거래일", "일자", "날짜", "사용일", "date"];
 const TIME_KEYS = ["승인시간", "이용시간", "거래시간", "사용시간", "시간", "시각", "time"];
+// 승인번호: 영수증 PDF와 매칭하는 키. "승인일자/시간/금액"과 혜동하지 않도록 제외.
+const APPROVAL_KEYS = ["승인번호", "승인no", "approvalno", "approval", "authno", "auth"];
 
 export interface ColumnMapping {
   merchant?: number;
@@ -35,6 +37,7 @@ export interface ColumnMapping {
   category?: number;
   region?: number;
   cancel?: number;
+  approval?: number;
 }
 
 function normalize(s: unknown): string {
@@ -119,6 +122,7 @@ export function parseStatement(buffer: Buffer, override?: ColumnMapping): ParseR
     currency: firstIndex(header, CURRENCY_KEYS),
     date: firstIndex(header, DATE_KEYS),
     time: firstIndex(header, TIME_KEYS),
+    approval: firstIndex(header, APPROVAL_KEYS, ["일자", "시간", "금액", "date"]),
   };
   const m: ColumnMapping = { ...detected, ...(override || {}) };
 
@@ -158,6 +162,7 @@ export function parseStatement(buffer: Buffer, override?: ColumnMapping): ParseR
       merchantCategory: get(row, m.category) || undefined,
       isForeign,
       canceled,
+      approval: get(row, m.approval) || undefined,
     });
   }
 

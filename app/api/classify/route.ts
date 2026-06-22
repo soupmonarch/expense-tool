@@ -54,6 +54,7 @@ export async function POST(req: NextRequest) {
       merchant: t.merchant,
       amount: t.amount,
       currency: t.currency || "KRW",
+      approval: t.approval ?? "",
       merchantCategory: t.merchantCategory ?? "",
       isForeign: !!t.isForeign,
       group: t.group,

@@ -14,6 +14,7 @@ interface Row {
   merchant: string;
   amount: number;
   currency: string;
+  approval: string;
   merchantCategory: string;
   isForeign: boolean;
   group: string;
@@ -45,6 +46,16 @@ interface Stats {
 
 type CancelChoice = "partial" | "full" | "separate";
 
+interface Payload {
+  date: string;
+  merchant: string;
+  amount: number;
+  currency: string;
+  category: string;
+  approval: string;
+  cancel?: { amount: number };
+}
+
 function fmt(n: number): string {
   return (n || 0).toLocaleString("ko-KR");
 }
@@ -52,6 +63,8 @@ function fmt(n: number): string {
 export default function Home() {
   const [file, setFile] = useState<File | null>(null);
   const [dragOver, setDragOver] = useState(false);
+  const [receiptFile, setReceiptFile] = useState<File | null>(null);
+  const [receiptDragOver, setReceiptDragOver] = useState(false);
   const [loading, setLoading] = useState(false);
   const [downloading, setDownloading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -175,10 +188,18 @@ export default function Home() {
   }
 
   // Apply confirmed cancellation choices to produce the final payload rows.
-  function finalizeRows(): { date: string; merchant: string; amount: number; currency: string; category: string }[] {
+  function finalizeRows(): Payload[] {
     const qById = new Map(cancelQuestions.map((q) => [q.paymentId, q]));
-    const out: Row[] = [];
+    const out: Payload[] = [];
     for (const r of rows || []) {
+      const base: Payload = {
+        date: r.date,
+        merchant: r.merchant,
+        amount: r.amount,
+        currency: r.currency,
+        category: r.category,
+        approval: r.approval,
+      };
       const q = qById.get(r.id);
       if (q) {
         const choice = cancelChoice[r.id] || "partial";
@@ -186,20 +207,15 @@ export default function Home() {
         if (choice === "partial") {
           const net = Math.max(0, r.amount - q.cancelAmount);
           if (net <= 0) continue;
-          out.push({ ...r, amount: net });
+          // 부분취소: 순액으로 합산하고 구매+취소 영수증을 한 페이지에 함께 붙인다.
+          out.push({ ...base, amount: net, cancel: { amount: q.cancelAmount } });
           continue;
         }
         // "separate" -> keep the full original amount
       }
-      out.push(r);
+      out.push(base);
     }
-    return out.map((r) => ({
-      date: r.date,
-      merchant: r.merchant,
-      amount: r.amount,
-      currency: r.currency,
-      category: r.category,
-    }));
+    return out;
   }
 
   async function download() {
@@ -208,11 +224,10 @@ export default function Home() {
     setError(null);
     try {
       const payload = finalizeRows();
-      const res = await fetch("/api/generate", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ rows: payload }),
-      });
+      const fd = new FormData();
+      fd.append("rows", JSON.stringify(payload));
+      if (receiptFile) fd.append("receipts", receiptFile);
+      const res = await fetch("/api/generate", { method: "POST", body: fd });
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
         throw new Error(data.error || `Failed (${res.status})`);
@@ -264,7 +279,36 @@ export default function Home() {
           {file ? (
             <span>📎 {file.name}</span>
           ) : (
-            <span style={mutedText}>여기로 파일을 끌어다 놓거나 클릭해서 선택하세요</span>
+            <span style={mutedText}>여기로 카드 승인내역(엑셀)을 끌어다 놓거나 클릭해서 선택하세요</span>
+          )}
+        </label>
+
+        <label
+          style={receiptDragOver ? dropActive : drop}
+          onDragOver={(e) => {
+            e.preventDefault();
+            setReceiptDragOver(true);
+          }}
+          onDragLeave={() => setReceiptDragOver(false)}
+          onDrop={(e) => {
+            e.preventDefault();
+            setReceiptDragOver(false);
+            const f = e.dataTransfer.files?.[0];
+            if (f) setReceiptFile(f);
+          }}
+        >
+          <input
+            type="file"
+            accept=".pdf"
+            onChange={(e) => setReceiptFile(e.target.files?.[0] ?? null)}
+            style={hiddenInput}
+          />
+          {receiptFile ? (
+            <span>🧾 {receiptFile.name}</span>
+          ) : (
+            <span style={mutedText}>
+              (선택) 영수증 PDF를 끌어다 놓거나 클릭해서 첨부 — 엑셀 순번에 맞춰 한 페이지씩 정리합니다
+            </span>
           )}
         </label>
 
@@ -303,13 +347,17 @@ export default function Home() {
 
         {rows && (
           <button type="button" onClick={download} disabled={downloading} style={button(downloading)}>
-            {downloading ? "생성 중…" : "엑셀 다운로드 (Expense + Travel)"}
+            {downloading
+              ? "생성 중…"
+              : receiptFile
+                ? "다운로드 (엑셀 2개 + 영수증 PDF 2개)"
+                : "엑셀 다운로드 (Expense + Travel)"}
           </button>
         )}
 
         <p style={hint}>
           💡 분류가 애매하거나 취소·환불이 있는 항목은 확인 창이 뜨고, 항목별로 체크한 분류는 서버에
-          저장돼 다음부터 모두에게 자동 적용됩니다{persistent ? "" : " (공유 저장소 미설정: 현재는 임시 저장)"}.
+          저장돼 다음부터 ��두에게 자동 적용됩니다{persistent ? "" : " (공유 저장소 미설정: 현재는 임시 저장)"}.
         </p>
       </div>
 
@@ -318,7 +366,7 @@ export default function Home() {
           <div style={modal} onClick={(e) => e.stopPropagation()}>
             <h2 style={modalTitle}>확인이 필요한 항목</h2>
             <p style={modalSub}>
-              아래 항목들을 확인해 주세요. 취소·환불 여부와 분류를 정하면 그대로 엑셀에 반영됩니다.
+              아래 항목들을 확인해 주세요. 취소·환불 여부와 분류를 정하면 ���대로 엑셀에 반영됩니다.
             </p>
 
             <div style={reviewList}>

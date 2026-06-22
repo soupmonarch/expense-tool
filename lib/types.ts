@@ -13,6 +13,7 @@ export interface Transaction {
   merchantCategory?: string; // 가맹점업종명 (MCC name)
   isForeign?: boolean;
   canceled?: boolean; // 취소 건 여부 (취소 정산에서 사용)
+  approval?: string; // 승인번호 (영수증 PDF 매칭 키)
   raw?: Record<string, unknown>;
 }
 
@@ -35,4 +36,6 @@ export interface FinalRow {
   amount: number;
   currency?: string;
   category: string;
+  approval?: string; // 승인번호 (영수증 매칭)
+  cancel?: { amount: number }; // 부분취소 행 -> 취소 영수증도 함께 첨부
 }

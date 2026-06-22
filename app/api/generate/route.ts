@@ -2,9 +2,11 @@ import { NextRequest, NextResponse } from "next/server";
 import JSZip from "jszip";
 import { fillForm, type FormRow } from "@/lib/fillTemplate";
 import { ALL_CATEGORIES, UNCLASSIFIED, groupOf, type Category } from "@/lib/categories";
+import { parseReceiptPdf } from "@/lib/parseReceipts";
+import { matchReceipts, renderReceiptPdf, type RowMeta } from "@/lib/buildReceiptPdf";
 
 export const runtime = "nodejs";
-export const maxDuration = 60;
+export const maxDuration = 120;
 
 interface IncomingRow {
   date?: string;
@@ -12,20 +14,41 @@ interface IncomingRow {
   amount: number;
   currency?: string;
   category: string;
+  approval?: string;
+  cancel?: { amount: number };
 }
 
-// Step 2: build the two filled forms from the user-finalized rows.
+// Step 2: build the two filled forms from the user-finalized rows, and -- if a
+// receipt PDF is attached -- two receipt PDFs whose page order matches the
+// Expense / Travel excel row order.
 export async function POST(req: NextRequest) {
   try {
-    const body = (await req.json()) as { rows?: IncomingRow[] };
-    const rows = Array.isArray(body.rows) ? body.rows : [];
-    if (rows.length === 0) {
+    let rows: IncomingRow[] = [];
+    let receiptBytes: Uint8Array | null = null;
+
+    const ctype = req.headers.get("content-type") || "";
+    if (ctype.includes("multipart/form-data")) {
+      const form = await req.formData();
+      const rowsRaw = form.get("rows");
+      if (typeof rowsRaw === "string") rows = JSON.parse(rowsRaw);
+      const rf = form.get("receipts");
+      if (rf instanceof File && rf.size > 0) {
+        receiptBytes = new Uint8Array(await rf.arrayBuffer());
+      }
+    } else {
+      const body = (await req.json()) as { rows?: IncomingRow[] };
+      rows = Array.isArray(body.rows) ? body.rows : [];
+    }
+
+    if (!Array.isArray(rows) || rows.length === 0) {
       return NextResponse.json({ error: "No rows provided" }, { status: 400 });
     }
 
     const valid = new Set<string>(ALL_CATEGORIES);
     const expenseRows: FormRow[] = [];
     const travelRows: FormRow[] = [];
+    const expenseMeta: RowMeta[] = [];
+    const travelMeta: RowMeta[] = [];
 
     for (const r of rows) {
       const form: FormRow = {
@@ -35,13 +58,19 @@ export async function POST(req: NextRequest) {
         currency: r.currency || "KRW",
         category: r.category,
       };
-      if (r.category && valid.has(r.category)) {
-        if (groupOf(r.category as Category) === "travel") travelRows.push(form);
-        else expenseRows.push(form);
+      const meta: RowMeta = {
+        approval: r.approval || "",
+        merchant: r.merchant,
+        cancel: r.cancel,
+      };
+      if (r.category && valid.has(r.category) && groupOf(r.category as Category) === "travel") {
+        travelRows.push(form);
+        travelMeta.push(meta);
       } else {
-        // Unclassified -> keep in the Expense file, flagged for manual fixing.
-        form.category = UNCLASSIFIED;
+        // Expense 또는 미분류는 Expense 파일로 (미분류는 표시).
+        if (!(r.category && valid.has(r.category))) form.category = UNCLASSIFIED;
         expenseRows.push(form);
+        expenseMeta.push(meta);
       }
     }
 
@@ -53,6 +82,75 @@ export async function POST(req: NextRequest) {
     const zip = new JSZip();
     zip.file("Expense.xlsx", expenseBuf);
     zip.file("Travel.xlsx", travelBuf);
+
+    // 영수증 PDF가 첨부되면 — 잘라서 엑셀 순번과 맞춰 두 개의 PDF로.
+    // 실패해도 엑셀 2개는 항상 나오도록 감싸서 처리한다.
+    if (receiptBytes) {
+      try {
+        const parsed = await parseReceiptPdf(receiptBytes);
+        const reportLines: string[] = [];
+        reportLines.push("영수증 PDF 처리 리포트");
+        reportLines.push("=====================");
+        reportLines.push("원본 페이지: " + parsed.pageCount + ", 인식된 영수증: " + parsed.receipts.length);
+
+        if (parsed.error) {
+          reportLines.push("⚠️ " + parsed.error);
+          zip.file("영수증_리포트.txt", reportLines.join("\n"));
+        } else {
+          const summary = matchReceipts(expenseMeta, travelMeta, parsed.receipts);
+          const [expensePdf, travelPdf] = await Promise.all([
+            renderReceiptPdf(receiptBytes, summary.expense),
+            renderReceiptPdf(receiptBytes, summary.travel),
+          ]);
+          zip.file("Expense_Receipts.pdf", expensePdf);
+          zip.file("Travel_Receipts.pdf", travelPdf);
+
+          reportLines.push("");
+          reportLines.push(
+            "Expense: " +
+              expenseMeta.length +
+              "행 중 영수증 매칭 " +
+              summary.expense.matchedRows +
+              "건, 미매칭 " +
+              summary.expense.missingRows +
+              "건",
+          );
+          reportLines.push(
+            "Travel: " +
+              travelMeta.length +
+              "행 중 영수증 매칭 " +
+              summary.travel.matchedRows +
+              "건, 미매칭 " +
+              summary.travel.missingRows +
+              "건",
+          );
+          if (summary.leftover.length > 0) {
+            reportLines.push("");
+            reportLines.push(
+              "⚠️ 어느 행에도 매칭되지 않아 제외된 영수증 " + summary.leftover.length + "장:",
+            );
+            for (const lo of summary.leftover) {
+              reportLines.push(
+                "  - p" +
+                  (lo.page + 1) +
+                  "(" +
+                  lo.side +
+                  ") 승인번호:" +
+                  (lo.approval || "없음") +
+                  " " +
+                  (lo.merchant || ""),
+              );
+            }
+          }
+          zip.file("영수증_리포트.txt", reportLines.join("\n"));
+        }
+      } catch (e: any) {
+        zip.file(
+          "영수증_리포트.txt",
+          "영수증 PDF 처리 중 오류가 발생했습니다: " + (e?.message || e),
+        );
+      }
+    }
 
     const zipBuf = await zip.generateAsync({ type: "nodebuffer" });
 
