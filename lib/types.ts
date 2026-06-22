@@ -17,7 +17,13 @@ export interface Transaction {
   raw?: Record<string, unknown>;
 }
 
-export type ClassificationSource = "learned" | "mcc" | "rule" | "ai" | "gateway" | "none";
+export type ClassificationSource =
+  | "learned"
+  | "mcc"
+  | "rule"
+  | "ai"
+  | "gateway"
+  | "none";
 
 export interface ClassifiedTransaction extends Transaction {
   id: number; // UI용 안정 id (rowIndex 사용)
@@ -27,6 +33,7 @@ export interface ClassifiedTransaction extends Transaction {
   confidence?: number;
   needsReview?: boolean; // true -> 검토 팝업에서 사용자에게 확인
   noLearn?: boolean; // true -> 결제대행사 등: 절대 학습하지 않음
+  suspectGateway?: boolean; // true -> PSP일 가능성(휴리스틱): 팝업에서 'PSP인가요?' 체크박스 제안
 }
 
 // 사용자가 분류를 검토/수정한 뒤 /api/generate 로 다시 전달되는 형태.

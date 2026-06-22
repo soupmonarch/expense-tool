@@ -2,27 +2,57 @@
 // 정보가 없으면) 무엇을 결제했는지 알 수 없으므로 항상 사용자에게 수동 분류를
 // 요청하고, 그 결과는 절대 학습하지 않는다.
 export const PAYMENT_GATEWAY_KEYWORDS: string[] = [
-  "alipay", "알리페이",
-  "wechat", "위챗페이", "위챗",
-  "paypal", "페이팔",
-  "google pay", "googlepay", "구글페이",
-  "apple pay", "applepay", "애플페이",
-  "naver pay", "naverpay", "네이버페이", "네이버파이낸셜",
-  "kakao pay", "kakaopay", "카카오페이",
-  "payco", "페이코",
-  "toss", "tosspayments", "토스페이", "토스페이먼츠",
-  "smilepay", "스마일페이",
-  "ssgpay", "ssg페이", "쓱페이",
-  "coupay", "쿠페이",
-  "11pay", "11페이",
-  "lpay", "엘페이",
-  "inicis", "이니시스",
+  "alipay",
+  "알리페이",
+  "wechat",
+  "위챗페이",
+  "위챗",
+  "paypal",
+  "페이팔",
+  "google pay",
+  "googlepay",
+  "구글페이",
+  "apple pay",
+  "applepay",
+  "애플페이",
+  "naver pay",
+  "naverpay",
+  "네이버페이",
+  "네이버파이낸셜",
+  "kakao pay",
+  "kakaopay",
+  "카카오페이",
+  "payco",
+  "페이코",
+  "toss",
+  "tosspayments",
+  "토스페이",
+  "토스페이먼츠",
+  "smilepay",
+  "스마일페이",
+  "ssgpay",
+  "ssg페이",
+  "쓱페이",
+  "coupay",
+  "쿠페이",
+  "11pay",
+  "11페이",
+  "lpay",
+  "엘페이",
+  "inicis",
+  "이니시스",
   "kcp",
-  "nicepay", "나이스페이",
-  "danal", "다날",
-  "settlebank", "세틀뱅크",
-  "mobilians", "모빌리언스",
-  "결제대행", "전자결제", "전자지급결제",
+  "nicepay",
+  "나이스페이",
+  "danal",
+  "다날",
+  "settlebank",
+  "세틀뱅크",
+  "mobilians",
+  "모빌리언스",
+  "결제대행",
+  "전자결제",
+  "전자지급결제",
 ];
 
 // 가맹점명(merchant name)만 검사한다. 업종명(MCC)까지 검사하면 일반 가맹점이
@@ -33,3 +63,29 @@ export function isPaymentGateway(merchant: string | undefined | null): boolean {
   if (!h) return false;
   return PAYMENT_GATEWAY_KEYWORDS.some((k) => h.includes(k.toLowerCase()));
 }
+
+// 약한 휴리스틱: 고정 목록에 없더라도 이름에 결제/페이류 토큰이 들어가면
+// "결제대행사일 수도" 있다고 보고, 검토 팝업에서 사용자에게 PSP 여부를 물어본다.
+// (확정이 아니라 제안용 — 사용자가 체크하면 그때 학습되어 다음부터 자동 인식)
+const SUSPECT_TOKENS: string[] = [
+  "페이",
+  "pay",
+  "결제",
+  "페이먼츠",
+  "payment",
+  "핀테크",
+  "fintech",
+  "간편결제",
+  "전자금융",
+];
+
+export function looksLikeGateway(merchant: string | undefined | null): boolean {
+  if (!merchant) return false;
+  const h = String(merchant).toLowerCase().replace(/\s+/g, " ").trim();
+  if (!h) return false;
+  if (isPaymentGateway(h)) return true;
+  return SUSPECT_TOKENS.some((k) => h.includes(k));
+}
+
+// 검토 팝업/관리 페이지에서 "PSP로 표시"를 의미하는 분류 sentinel 값.
+export const PSP_MARK = "__GATEWAY__";

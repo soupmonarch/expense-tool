@@ -12,6 +12,12 @@ import { kv } from "@vercel/kv";
 const HASH = "expense_merchant_categories";
 const memory = new Map<string, string>();
 
+// 결제대행사(PSP) 학습 세트. 사용자가 검토 팝업/관리 페이지에서 "이건 결제대행사"
+// 라고 확정한 가맹점의 정규화 키를 모은다. 여기 등록된 가맹점은 이후 모든 업로드에서
+// 항상 수동 분류를 요구하고 카테고리는 절대 학습하지 않는다(고정 키워드 목록의 보완).
+const GATEWAY_HASH = "expense_payment_gateways";
+const gatewayMemory = new Set<string>();
+
 export function kvEnabled(): boolean {
   return !!(process.env.KV_REST_API_URL && process.env.KV_REST_API_TOKEN);
 }
@@ -39,7 +45,10 @@ export async function getLearnedMap(): Promise<Record<string, string>> {
   return Object.fromEntries(memory);
 }
 
-export async function saveLearned(merchant: string, category: string): Promise<void> {
+export async function saveLearned(
+  merchant: string,
+  category: string,
+): Promise<void> {
   const key = normalizeMerchant(merchant);
   if (!key) return;
   if (kvEnabled()) {
@@ -67,4 +76,61 @@ export async function deleteLearned(merchant: string): Promise<void> {
     }
   }
   memory.delete(key);
+}
+
+// PSP로 확정된 가맹점명들의 정규화 키 집합을 반환한다.
+export async function getLearnedGateways(): Promise<Set<string>> {
+  if (kvEnabled()) {
+    try {
+      const map = await kv.hgetall<Record<string, string>>(GATEWAY_HASH);
+      return new Set(Object.keys(map || {}));
+    } catch (e) {
+      console.error("KV read failed, using memory:", e);
+    }
+  }
+  return new Set(gatewayMemory);
+}
+
+// PSP 표시된 가맹점명→원본표기 맵을 전체 반환한다(관리 페이지 목록용).
+export async function getLearnedGatewayMap(): Promise<Record<string, string>> {
+  if (kvEnabled()) {
+    try {
+      const map = await kv.hgetall<Record<string, string>>(GATEWAY_HASH);
+      return map || {};
+    } catch (e) {
+      console.error("KV read failed, using memory:", e);
+    }
+  }
+  return Object.fromEntries([...gatewayMemory].map((k) => [k, k]));
+}
+
+// 가맹점을 PSP로 학습한다. PSP는 카테고리 학습이 무의미하므로 기존 카테고리 매핑은 함께 지운다.
+export async function saveLearnedGateway(merchant: string): Promise<void> {
+  const key = normalizeMerchant(merchant);
+  if (!key) return;
+  await deleteLearned(merchant);
+  if (kvEnabled()) {
+    try {
+      await kv.hset(GATEWAY_HASH, { [key]: merchant });
+      return;
+    } catch (e) {
+      console.error("KV write failed, using memory:", e);
+    }
+  }
+  gatewayMemory.add(key);
+}
+
+// PSP 학습 항목 하나를 제거한다(잘못 표시된 경우 복구용).
+export async function deleteLearnedGateway(merchant: string): Promise<void> {
+  const key = normalizeMerchant(merchant);
+  if (!key) return;
+  if (kvEnabled()) {
+    try {
+      await kv.hdel(GATEWAY_HASH, key);
+      return;
+    } catch (e) {
+      console.error("KV delete failed, using memory:", e);
+    }
+  }
+  gatewayMemory.delete(key);
 }

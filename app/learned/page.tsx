@@ -2,6 +2,12 @@
 
 import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import { EXPENSE_CATEGORIES, TRAVEL_CATEGORIES } from "@/lib/categories";
+import { PSP_MARK } from "@/lib/gateways";
+
+interface Gateway {
+  merchant: string;
+  label: string;
+}
 
 interface Entry {
   merchant: string;
@@ -20,7 +26,11 @@ function CategorySelect(props: {
   style?: CSSProperties;
 }) {
   return (
-    <select style={props.style} value={props.value} onChange={(e) => props.onChange(e.target.value)}>
+    <select
+      style={props.style}
+      value={props.value}
+      onChange={(e) => props.onChange(e.target.value)}
+    >
       <option value="">분류 선택…</option>
       <optgroup label="Expense">
         {EXPENSE_CATEGORIES.map((c) => (
@@ -42,6 +52,7 @@ function CategorySelect(props: {
 
 export default function LearnedPage() {
   const [entries, setEntries] = useState<Entry[]>([]);
+  const [gateways, setGateways] = useState<Gateway[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [persistent, setPersistent] = useState(false);
@@ -66,6 +77,7 @@ export default function LearnedPage() {
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error || "불러오기 실패");
       setEntries(data.entries || []);
+      setGateways(data.gateways || []);
       setPersistent(!!data.persistent);
     } catch (e: any) {
       setError(e?.message || "불러오기 실패");
@@ -82,7 +94,9 @@ export default function LearnedPage() {
     const k = q.trim().toLowerCase();
     if (!k) return entries;
     return entries.filter(
-      (e) => e.merchant.toLowerCase().includes(k) || e.category.toLowerCase().includes(k),
+      (e) =>
+        e.merchant.toLowerCase().includes(k) ||
+        e.category.toLowerCase().includes(k),
     );
   }, [entries, q]);
 
@@ -145,7 +159,13 @@ export default function LearnedPage() {
   }
 
   async function remove(merchant: string) {
-    if (!confirm(merchant + " 항목을 학습 데이터에서 삭제할까요? 모든 사용자에게 적용됩니다.")) return;
+    if (
+      !confirm(
+        merchant +
+          " 항목을 학습 데이터에서 삭제할까요? 모든 사용자에게 적용됩니다.",
+      )
+    )
+      return;
     setBusy(merchant);
     try {
       const res = await fetch("/api/learn", {
@@ -163,12 +183,68 @@ export default function LearnedPage() {
     }
   }
 
+  // 잘못 학습된 가맹점을 결제대행사로 재분류(카테고리 학습 제거 + PSP 목록으로 이동).
+  async function convertToGateway(merchant: string) {
+    if (
+      !confirm(
+        merchant +
+          " 항목을 결제대행사로 변경할까요? 카테고리 학습이 삭제되고, 다음부터 이 가맹점은 항상 수동 분류로 표시됩니다. 모든 사용자에게 적용됩니다.",
+      )
+    )
+      return;
+    setBusy(merchant);
+    try {
+      const res = await fetch("/api/learn", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          oldMerchant: merchant,
+          merchant,
+          category: PSP_MARK,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error || "변경 실패");
+      await load();
+    } catch (e: any) {
+      alert(e?.message || "변경 실패");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function removeGateway(merchant: string) {
+    if (
+      !confirm(
+        merchant + " 결제대행사 항목을 삭제할까요? 모든 사용자에게 적용됩니다.",
+      )
+    )
+      return;
+    setBusy("g:" + merchant);
+    try {
+      const res = await fetch("/api/learn", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ merchant, kind: "gateway" }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error || "삭제 실패");
+      setGateways((prev) => prev.filter((g) => g.merchant !== merchant));
+    } catch (e: any) {
+      alert(e?.message || "삭제 실패");
+    } finally {
+      setBusy(null);
+    }
+  }
+
   function exportCsv() {
     const header = "merchant,category,group\n";
     const body = entries
       .map((e) => [e.merchant, e.category, e.group].map(csvCell).join(","))
       .join("\n");
-    const blob = new Blob(["\uFEFF" + header + body], { type: "text/csv;charset=utf-8;" });
+    const blob = new Blob(["\uFEFF" + header + body], {
+      type: "text/csv;charset=utf-8;",
+    });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
@@ -180,11 +256,13 @@ export default function LearnedPage() {
   return (
     <main style={wrap}>
       <div style={card}>
-        <a href="/" style={back}>← 메인으로</a>
+        <a href="/" style={back}>
+          ← 메인으로
+        </a>
         <h1 style={title}>학습된 분류 데이터</h1>
         <p style={subtitle}>
-          가맹점 → 분류 매핑을 직접 추가·수정·삭제할 수 있습니다.
-          여기 누적된 데이터는 <b>모든 사용자</b>의 다음 업로드부터 자동 적용됩니다.
+          가맹점 → 분류 매핑을 직접 추가·수정·삭제할 수 있습니다. 여기 누적된
+          데이터는 <b>모든 사용자</b>의 다음 업로드부터 자동 적용됩니다.
         </p>
 
         <div style={badges}>
@@ -219,13 +297,18 @@ export default function LearnedPage() {
               value={addMerchant}
               onChange={(e) => setAddMerchant(e.target.value)}
             />
-            <CategorySelect value={addCategory} onChange={setAddCategory} style={addSelect} />
+            <CategorySelect
+              value={addCategory}
+              onChange={setAddCategory}
+              style={addSelect}
+            />
             <button style={addBtn} disabled={saving} onClick={addEntry}>
               추가
             </button>
           </div>
           <p style={addHint}>
-            가맹점명은 자동으로 정규화되어 저장됩니다(소문자·끝 숫자 제거). 결제대행사명은 추가할 수 없습니다.
+            가맹점명은 자동으로 정규화되어 저장됩니다(소문자·끝 숫자 제거).
+            결제대행사명은 추가할 수 없습니다.
           </p>
         </div>
 
@@ -239,7 +322,11 @@ export default function LearnedPage() {
           <button style={ghostBtn} onClick={load}>
             새로고침
           </button>
-          <button style={ghostBtn} onClick={exportCsv} disabled={!entries.length}>
+          <button
+            style={ghostBtn}
+            onClick={exportCsv}
+            disabled={!entries.length}
+          >
             CSV 내보내기
           </button>
         </div>
@@ -250,7 +337,9 @@ export default function LearnedPage() {
           <p style={errBox}>{error}</p>
         ) : filtered.length === 0 ? (
           <p style={muted}>
-            {entries.length === 0 ? "아직 학습된 데이터가 없습니다. 위에서 새 항목을 추가해 보세요." : "검색 결과가 없습니다."}
+            {entries.length === 0
+              ? "아직 학습된 데이터가 없습니다. 위에서 새 항목을 추가해 보세요."
+              : "검색 결과가 없습니다."}
           </p>
         ) : (
           <table style={table}>
@@ -293,16 +382,28 @@ export default function LearnedPage() {
                       {editing ? (
                         <span style={dash}>—</span>
                       ) : (
-                        <span style={e.group === "travel" ? tagTravel : tagExpense}>{e.group}</span>
+                        <span
+                          style={e.group === "travel" ? tagTravel : tagExpense}
+                        >
+                          {e.group}
+                        </span>
                       )}
                     </td>
                     <td style={tdC}>
                       {editing ? (
                         <div style={btnRow}>
-                          <button style={saveBtn} disabled={saving} onClick={() => saveEdit(e.merchant)}>
+                          <button
+                            style={saveBtn}
+                            disabled={saving}
+                            onClick={() => saveEdit(e.merchant)}
+                          >
                             저장
                           </button>
-                          <button style={cancelBtn} disabled={saving} onClick={() => setEditKey(null)}>
+                          <button
+                            style={cancelBtn}
+                            disabled={saving}
+                            onClick={() => setEditKey(null)}
+                          >
                             취소
                           </button>
                         </div>
@@ -310,6 +411,14 @@ export default function LearnedPage() {
                         <div style={btnRow}>
                           <button style={editBtn} onClick={() => startEdit(e)}>
                             수정
+                          </button>
+                          <button
+                            style={editBtn}
+                            disabled={busy === e.merchant}
+                            onClick={() => convertToGateway(e.merchant)}
+                            title="이 가맹점을 결제대행사로 변경(학습 삭제)"
+                          >
+                            결제대행사로
                           </button>
                           <button
                             style={delBtn}
@@ -328,11 +437,51 @@ export default function LearnedPage() {
           </table>
         )}
 
+        <div style={gwWrap}>
+          <h2 style={gwTitle}>
+            💳 결제대행사 (학습 금지) · {gateways.length}건
+          </h2>
+          <p style={subtitle}>
+            아래 가맹점은 결제대행사로 등록되어 카테고리를 자동 학습하지 않고,
+            업로드할 때마다 수동 분류를 요청합니다. 검토 팝업에서 '결제대행사'
+            체크하거나 위 목록에서 '결제대행사로' 버튼을 누르면 여기 추가됩니다.
+          </p>
+          {gateways.length === 0 ? (
+            <p style={muted}>아직 등록된 결제대행사가 없습니다.</p>
+          ) : (
+            <table style={table}>
+              <thead>
+                <tr>
+                  <th style={th}>가맹점(정규화)</th>
+                  <th style={thC}>관리</th>
+                </tr>
+              </thead>
+              <tbody>
+                {gateways.map((g) => (
+                  <tr key={g.merchant}>
+                    <td style={td}>{g.label || g.merchant}</td>
+                    <td style={tdC}>
+                      <button
+                        style={delBtn}
+                        disabled={busy === "g:" + g.merchant}
+                        onClick={() => removeGateway(g.merchant)}
+                      >
+                        {busy === "g:" + g.merchant ? "…" : "삭제"}
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+
         <p style={hint}>
-          수정은 분류뿐 아니라 가맹점명도 바꿀 수 있습니다(이름을 바꿀 경우 기존 항목은
-          자동으로 옮겨집니다). 모든 변경은 공유 저장소에 즉시 반영되어 전체 사용자에게
-          적용됩니다. 원본 데이터는 Vercel → Storage → KV(Upstash) 데이터 브라우저의
-          해시 <code>expense_merchant_categories</code> 에서도 볼 수 있습니다.
+          수정은 분류뿐 아니라 가맹점명도 바꿀 수 있습니다(이름을 바꿀 경우 기존
+          항목은 자동으로 옮겨집니다). 모든 변경은 공유 저장소에 즉시 반영되어
+          전체 사용자에게 적용됩니다. 원본 데이터는 Vercel → Storage →
+          KV(Upstash) 데이터 브라우저의 해시{" "}
+          <code>expense_merchant_categories</code> 에서도 볼 수 있습니다.
         </p>
       </div>
     </main>
@@ -355,9 +504,20 @@ const card: CSSProperties = {
   padding: 32,
   boxShadow: "0 1px 3px rgba(0,0,0,0.08)",
 };
-const back: CSSProperties = { fontSize: 13, color: "#2d6cdf", textDecoration: "none" };
+const back: CSSProperties = {
+  fontSize: 13,
+  color: "#2d6cdf",
+  textDecoration: "none",
+};
 const title: CSSProperties = { fontSize: 22, margin: "10px 0 8px" };
-const subtitle: CSSProperties = { fontSize: 14, color: "#5f6873", lineHeight: 1.6, marginBottom: 16 };
+const subtitle: CSSProperties = {
+  fontSize: 14,
+  color: "#5f6873",
+  lineHeight: 1.6,
+  marginBottom: 16,
+};
+const gwWrap: CSSProperties = { marginTop: 28 };
+const gwTitle: CSSProperties = { fontSize: 18, margin: "0 0 6px" };
 const badges: CSSProperties = { marginBottom: 16 };
 const badgeBase: CSSProperties = {
   display: "inline-block",
@@ -366,8 +526,16 @@ const badgeBase: CSSProperties = {
   padding: "4px 10px",
   borderRadius: 999,
 };
-const badgeOn: CSSProperties = { ...badgeBase, background: "#e6f4ea", color: "#1e7a3d" };
-const badgeOff: CSSProperties = { ...badgeBase, background: "#fdecec", color: "#b3261e" };
+const badgeOn: CSSProperties = {
+  ...badgeBase,
+  background: "#e6f4ea",
+  color: "#1e7a3d",
+};
+const badgeOff: CSSProperties = {
+  ...badgeBase,
+  background: "#fdecec",
+  color: "#b3261e",
+};
 const statsRow: CSSProperties = { display: "flex", gap: 12, marginBottom: 20 };
 const stat: CSSProperties = {
   flex: 1,
@@ -385,7 +553,12 @@ const addBox: CSSProperties = {
   padding: 16,
   marginBottom: 20,
 };
-const addTitle: CSSProperties = { fontSize: 14, fontWeight: 700, marginBottom: 10, color: "#374151" };
+const addTitle: CSSProperties = {
+  fontSize: 14,
+  fontWeight: 700,
+  marginBottom: 10,
+  color: "#374151",
+};
 const addRow: CSSProperties = { display: "flex", gap: 8, flexWrap: "wrap" };
 const addInput: CSSProperties = {
   flex: "1 1 200px",
@@ -412,7 +585,12 @@ const addBtn: CSSProperties = {
   fontWeight: 600,
   cursor: "pointer",
 };
-const addHint: CSSProperties = { fontSize: 12, color: "#9097a1", marginTop: 8, marginBottom: 0 };
+const addHint: CSSProperties = {
+  fontSize: 12,
+  color: "#9097a1",
+  marginTop: 8,
+  marginBottom: 0,
+};
 const toolbar: CSSProperties = { display: "flex", gap: 8, marginBottom: 16 };
 const searchBox: CSSProperties = {
   flex: 1,
@@ -430,7 +608,11 @@ const ghostBtn: CSSProperties = {
   cursor: "pointer",
   whiteSpace: "nowrap",
 };
-const muted: CSSProperties = { color: "#6b7280", fontSize: 14, padding: "20px 0" };
+const muted: CSSProperties = {
+  color: "#6b7280",
+  fontSize: 14,
+  padding: "20px 0",
+};
 const errBox: CSSProperties = {
   color: "#b3261e",
   background: "#fdecec",
@@ -438,7 +620,11 @@ const errBox: CSSProperties = {
   borderRadius: 8,
   fontSize: 14,
 };
-const table: CSSProperties = { width: "100%", borderCollapse: "collapse", fontSize: 13 };
+const table: CSSProperties = {
+  width: "100%",
+  borderCollapse: "collapse",
+  fontSize: 13,
+};
 const th: CSSProperties = {
   textAlign: "left",
   padding: "8px 10px",
@@ -447,7 +633,11 @@ const th: CSSProperties = {
   fontWeight: 600,
 };
 const thC: CSSProperties = { ...th, textAlign: "center" };
-const td: CSSProperties = { padding: "8px 10px", borderBottom: "1px solid #f0f1f3", verticalAlign: "middle" };
+const td: CSSProperties = {
+  padding: "8px 10px",
+  borderBottom: "1px solid #f0f1f3",
+  verticalAlign: "middle",
+};
 const tdCat: CSSProperties = { ...td, color: "#374151" };
 const tdC: CSSProperties = { ...td, textAlign: "center" };
 const dash: CSSProperties = { color: "#c0c5cc" };
@@ -473,9 +663,21 @@ const tagBase: CSSProperties = {
   padding: "2px 8px",
   borderRadius: 999,
 };
-const tagExpense: CSSProperties = { ...tagBase, background: "#e7f0ff", color: "#2d6cdf" };
-const tagTravel: CSSProperties = { ...tagBase, background: "#fff1e0", color: "#c2710c" };
-const btnRow: CSSProperties = { display: "flex", gap: 6, justifyContent: "center" };
+const tagExpense: CSSProperties = {
+  ...tagBase,
+  background: "#e7f0ff",
+  color: "#2d6cdf",
+};
+const tagTravel: CSSProperties = {
+  ...tagBase,
+  background: "#fff1e0",
+  color: "#c2710c",
+};
+const btnRow: CSSProperties = {
+  display: "flex",
+  gap: 6,
+  justifyContent: "center",
+};
 const editBtn: CSSProperties = {
   padding: "5px 12px",
   border: "1px solid #c9d4e6",

@@ -19,7 +19,12 @@ export async function POST(req: NextRequest) {
     }
 
     const override: ColumnMapping = {};
-    const keys: (keyof ColumnMapping)[] = ["merchant", "amount", "currency", "date"];
+    const keys: (keyof ColumnMapping)[] = [
+      "merchant",
+      "amount",
+      "currency",
+      "date",
+    ];
     for (const k of keys) {
       const v = form.get(`col_${k}`);
       if (v !== null && v !== "") override[k] = Number(v);
@@ -43,7 +48,8 @@ export async function POST(req: NextRequest) {
     }
 
     // Net out cancellations against original payments before classifying.
-    const { payments, questions, autoVoided } = reconcileCancellations(transactions);
+    const { payments, questions, autoVoided } =
+      reconcileCancellations(transactions);
 
     const classified = await classifyAll(payments);
 
@@ -63,6 +69,7 @@ export async function POST(req: NextRequest) {
       confidence: t.confidence ?? null,
       needsReview: !!t.needsReview,
       noLearn: !!t.noLearn,
+      suspectGateway: !!t.suspectGateway,
     }));
 
     const stats = {
@@ -83,6 +90,9 @@ export async function POST(req: NextRequest) {
     });
   } catch (err: any) {
     console.error(err);
-    return NextResponse.json({ error: err?.message || "Classification failed" }, { status: 500 });
+    return NextResponse.json(
+      { error: err?.message || "Classification failed" },
+      { status: 500 },
+    );
   }
 }

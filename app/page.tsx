@@ -1,6 +1,12 @@
 "use client";
 
-import { useMemo, useRef, useState, type CSSProperties, type DragEvent } from "react";
+import {
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type DragEvent,
+} from "react";
 import {
   EXPENSE_CATEGORIES,
   TRAVEL_CATEGORIES,
@@ -23,6 +29,7 @@ interface Row {
   confidence: number | null;
   needsReview: boolean;
   noLearn: boolean;
+  suspectGateway: boolean;
 }
 
 interface CancelQuestion {
@@ -74,13 +81,21 @@ export default function Home() {
   const [persistent, setPersistent] = useState(false);
 
   const [cancelQuestions, setCancelQuestions] = useState<CancelQuestion[]>([]);
-  const [cancelChoice, setCancelChoice] = useState<Record<number, CancelChoice>>({});
+  const [cancelChoice, setCancelChoice] = useState<
+    Record<number, CancelChoice>
+  >({});
   const [learnChoice, setLearnChoice] = useState<Record<number, boolean>>({});
+  const [gatewayChoice, setGatewayChoice] = useState<Record<number, boolean>>(
+    {},
+  );
 
   const [reviewOpen, setReviewOpen] = useState(false);
   const inputRef = useRef<HTMLInputElement | null>(null);
 
-  const reviewRows = useMemo(() => (rows || []).filter((r) => r.needsReview), [rows]);
+  const reviewRows = useMemo(
+    () => (rows || []).filter((r) => r.needsReview),
+    [rows],
+  );
 
   function pickFile(f: File | null) {
     setFile(f);
@@ -90,6 +105,7 @@ export default function Home() {
     setCancelQuestions([]);
     setCancelChoice({});
     setLearnChoice({});
+    setGatewayChoice({});
   }
 
   function onDrop(e: DragEvent<HTMLLabelElement>) {
@@ -129,7 +145,14 @@ export default function Home() {
       for (const r of newRows) if (r.needsReview) lc[r.id] = !r.noLearn;
       setLearnChoice(lc);
 
-      if (questions.length > 0 || newRows.some((r) => r.needsReview)) setReviewOpen(true);
+      // PSP로 보이는 항목은 '결제대행사' 체크박스를 자동으로 제안(미리 체크)한다.
+      const gc: Record<number, boolean> = {};
+      for (const r of newRows)
+        if (r.needsReview && !r.noLearn) gc[r.id] = !!r.suspectGateway;
+      setGatewayChoice(gc);
+
+      if (questions.length > 0 || newRows.some((r) => r.needsReview))
+        setReviewOpen(true);
     } catch (err: any) {
       setError(err?.message || "Something went wrong");
     } finally {
@@ -157,6 +180,9 @@ export default function Home() {
   function setLearn(id: number, on: boolean) {
     setLearnChoice((p) => ({ ...p, [id]: on }));
   }
+  function setGateway(id: number, on: boolean) {
+    setGatewayChoice((p) => ({ ...p, [id]: on }));
+  }
   function setAllLearn(on: boolean) {
     setLearnChoice(() => {
       const next: Record<number, boolean> = {};
@@ -168,15 +194,27 @@ export default function Home() {
   async function applyReview() {
     // Save only the rows the user chose to learn (per-item), excluding gateways
     // and unclassified.
+    // PSP로 표시한 가맹점은 결제대행사로 학습(카테고리 학습 제외).
+    const gateways = reviewRows
+      .filter((r) => !r.noLearn && gatewayChoice[r.id])
+      .map((r) => r.merchant);
+    // 카테고리 학습은 PSP로 표시하지 않은 행에만 적용한다.
     const items = reviewRows
-      .filter((r) => !r.noLearn && learnChoice[r.id] && r.category && r.category !== UNCLASSIFIED)
+      .filter(
+        (r) =>
+          !r.noLearn &&
+          !gatewayChoice[r.id] &&
+          learnChoice[r.id] &&
+          r.category &&
+          r.category !== UNCLASSIFIED,
+      )
       .map((r) => ({ merchant: r.merchant, category: r.category }));
-    if (items.length > 0) {
+    if (items.length > 0 || gateways.length > 0) {
       try {
         await fetch("/api/learn", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ items }),
+          body: JSON.stringify({ items, gateways }),
         });
       } catch {
         /* non-fatal: still let the user download */
@@ -208,7 +246,11 @@ export default function Home() {
           const net = Math.max(0, r.amount - q.cancelAmount);
           if (net <= 0) continue;
           // 부분취소: 순액으로 합산하고 구매+취소 영수증을 한 페이지에 함께 붙인다.
-          out.push({ ...base, amount: net, cancel: { amount: q.cancelAmount } });
+          out.push({
+            ...base,
+            amount: net,
+            cancel: { amount: q.cancelAmount },
+          });
           continue;
         }
         // "separate" -> keep the full original amount
@@ -254,11 +296,14 @@ export default function Home() {
       <div style={card}>
         <h1 style={title}>지출 증빙 · 변제 양식 자동 생성기</h1>
         <p style={subtitle}>
-          카드 사용 내역 파일(.xls / .xlsx)을 올리면 <b>Expense</b>와 <b>Travel</b> 두 개의
-          제출 양식을 만들어 ZIP으로 다운로드합니다. 카드사가 달라도 자동 인식합니다.
+          카드 사용 내역 파일(.xls / .xlsx)을 올리면 <b>Expense</b>와{" "}
+          <b>Travel</b> 두 개의 제출 양식을 만들어 ZIP으로 다운로드합니다.
+          카드사가 달라도 자동 인식합니다.
         </p>
 
-        <a href="/learned" style={navLink}>📚 지금까지 학습된 분류 데이터 보기 · 관리 →</a>
+        <a href="/learned" style={navLink}>
+          📚 지금까지 학습된 분류 데이터 보기 · 관리 →
+        </a>
 
         <label
           style={dragOver ? dropActive : drop}
@@ -279,7 +324,9 @@ export default function Home() {
           {file ? (
             <span>📎 {file.name}</span>
           ) : (
-            <span style={mutedText}>여기로 카드 승인내역(엑셀)을 끌어다 놓거나 클릭해서 선택하세요</span>
+            <span style={mutedText}>
+              여기로 카드 승인내역(엑셀)을 끌어다 놓거나 클릭해서 선택하세요
+            </span>
           )}
         </label>
 
@@ -307,7 +354,8 @@ export default function Home() {
             <span>🧾 {receiptFile.name}</span>
           ) : (
             <span style={mutedText}>
-              (선택) 영수증 PDF를 끌어다 놓거나 클릭해서 첨부 — 엑셀 순번에 맞춰 한 페이지씩 정리합니다
+              (선택) 영수증 PDF를 끌어다 놓거나 클릭해서 첨부 — 엑셀 순번에 맞춰
+              한 페이지씩 정리합니다
             </span>
           )}
         </label>
@@ -326,16 +374,29 @@ export default function Home() {
         {stats && (
           <div style={statBox}>
             <div>✅ 총 {fmt(stats.total)}건 분류 완료</div>
-            <div>🧾 Expense: {fmt(stats.expense)}건 · ✈️ Travel: {fmt(stats.travel)}건</div>
+            <div>
+              🧾 Expense: {fmt(stats.expense)}건 · ✈️ Travel:{" "}
+              {fmt(stats.travel)}건
+            </div>
             {stats.autoVoided > 0 && (
-              <div style={mutedText}>↩️ 취소·환불 {fmt(stats.autoVoided)}건 자동 반영(제외)</div>
+              <div style={mutedText}>
+                ↩️ 취소·환불 {fmt(stats.autoVoided)}건 자동 반영(제외)
+              </div>
             )}
             {remainingReview > 0 || cancelQuestions.length > 0 ? (
               <div style={warnText}>
                 ⚠️ 확인 필요
-                {cancelQuestions.length > 0 ? ` · 취소확인 ${fmt(cancelQuestions.length)}건` : ""}
-                {remainingReview > 0 ? ` · 분류확인 ${fmt(remainingReview)}건` : ""}
-                <button type="button" style={linkBtn} onClick={() => setReviewOpen(true)}>
+                {cancelQuestions.length > 0
+                  ? ` · 취소확인 ${fmt(cancelQuestions.length)}건`
+                  : ""}
+                {remainingReview > 0
+                  ? ` · 분류확인 ${fmt(remainingReview)}건`
+                  : ""}
+                <button
+                  type="button"
+                  style={linkBtn}
+                  onClick={() => setReviewOpen(true)}
+                >
                   검토하기
                 </button>
               </div>
@@ -346,7 +407,12 @@ export default function Home() {
         )}
 
         {rows && (
-          <button type="button" onClick={download} disabled={downloading} style={button(downloading)}>
+          <button
+            type="button"
+            onClick={download}
+            disabled={downloading}
+            style={button(downloading)}
+          >
             {downloading
               ? "생성 중…"
               : receiptFile
@@ -356,8 +422,9 @@ export default function Home() {
         )}
 
         <p style={hint}>
-          💡 분류가 애매하거나 취소·환불이 있는 항목은 확인 창이 뜨고, 항목별로 체크한 분류는 서버에
-          저장돼 다음부터 ��두에게 자동 적용됩니다{persistent ? "" : " (공유 저장소 미설정: 현재는 임시 저장)"}.
+          💡 분류가 애매하거나 취소·환불이 있는 항목은 확인 창이 뜨고, 항목별로
+          체크한 분류는 서버에 저장돼 다음부터 ��두에게 자동 적용됩니다
+          {persistent ? "" : " (공유 저장소 미설정: 현재는 임시 저장)"}.
         </p>
       </div>
 
@@ -366,11 +433,14 @@ export default function Home() {
           <div style={modal} onClick={(e) => e.stopPropagation()}>
             <h2 style={modalTitle}>확인이 필요한 항목</h2>
             <p style={modalSub}>
-              아래 항목들을 확인해 주세요. 취소·환불 여부와 분류를 정하면 ���대로 엑셀에 반영됩니다.
+              아래 항목들을 확인해 주세요. 취소·환불 여부와 분류를 정하면
+              ���대로 엑셀에 반영됩니다.
             </p>
 
             <div style={reviewList}>
-              {!hasModalContent && <div style={mutedText}>확인할 항목이 없습니다.</div>}
+              {!hasModalContent && (
+                <div style={mutedText}>확인할 항목이 없습니다.</div>
+              )}
 
               {cancelQuestions.length > 0 && (
                 <div style={sectionLabel}>↩️ 취소·환불 확인</div>
@@ -378,10 +448,13 @@ export default function Home() {
               {cancelQuestions.map((q) => (
                 <div key={"c" + q.paymentId} style={reviewItem}>
                   <div style={reviewInfo}>
-                    <div style={reviewMerchant}>{q.merchant || "(가맹점명 없음)"}</div>
+                    <div style={reviewMerchant}>
+                      {q.merchant || "(가맹점명 없음)"}
+                    </div>
                     <div style={reviewMeta}>
                       결제 {fmt(q.paymentAmount)}원
-                      {q.paymentDate ? " (" + q.paymentDate + ")" : ""} · 취소 {fmt(q.cancelAmount)}원
+                      {q.paymentDate ? " (" + q.paymentDate + ")" : ""} · 취소{" "}
+                      {fmt(q.cancelAmount)}원
                       {q.cancelDate ? " (" + q.cancelDate + ")" : ""}
                     </div>
                     <div style={reviewQuestion}>
@@ -391,11 +464,17 @@ export default function Home() {
                   <select
                     style={select}
                     value={cancelChoice[q.paymentId] || "partial"}
-                    onChange={(e) => setCancel(q.paymentId, e.target.value as CancelChoice)}
+                    onChange={(e) =>
+                      setCancel(q.paymentId, e.target.value as CancelChoice)
+                    }
                   >
-                    <option value="partial">부분취소 — 최종 {fmt(q.proposedNet)}원으로 합산</option>
+                    <option value="partial">
+                      부분취소 — 최종 {fmt(q.proposedNet)}원으로 합산
+                    </option>
                     <option value="full">전액취소 — 제외(0원)</option>
-                    <option value="separate">별개 건 — 결제 {fmt(q.paymentAmount)}원 그대로</option>
+                    <option value="separate">
+                      별개 건 — 결제 {fmt(q.paymentAmount)}원 그대로
+                    </option>
                   </select>
                 </div>
               ))}
@@ -405,8 +484,20 @@ export default function Home() {
                   <div style={sectionLabel}>🯷 분류 확인</div>
                   <div style={sectionTools}>
                     학습
-                    <button type="button" style={miniBtn} onClick={() => setAllLearn(true)}>모두</button>
-                    <button type="button" style={miniBtn} onClick={() => setAllLearn(false)}>해제</button>
+                    <button
+                      type="button"
+                      style={miniBtn}
+                      onClick={() => setAllLearn(true)}
+                    >
+                      모두
+                    </button>
+                    <button
+                      type="button"
+                      style={miniBtn}
+                      onClick={() => setAllLearn(false)}
+                    >
+                      해제
+                    </button>
                   </div>
                 </div>
               )}
@@ -415,18 +506,29 @@ export default function Home() {
                 return (
                   <div key={r.id} style={reviewItem}>
                     <div style={reviewInfo}>
-                      <div style={reviewMerchant}>{r.merchant || "(가맹점명 없음)"}</div>
+                      <div style={reviewMerchant}>
+                        {r.merchant || "(가맹점명 없음)"}
+                      </div>
                       <div style={reviewMeta}>
                         {r.date ? r.date + " " : ""}
-                        {r.time ? r.time + " · " : (r.date ? "· " : "")}
+                        {r.time ? r.time + " · " : r.date ? "· " : ""}
                         {fmt(r.amount)} {r.currency}
                         {r.merchantCategory ? " · " + r.merchantCategory : ""}
                         {r.isForeign ? " · 해외" : ""}
                       </div>
                       {isGateway && (
                         <div style={gatewayNote}>
-                          🔍 {r.date || ""}{r.time ? " " + r.time : ""}에 결제한 내역입니다. 결제대행사(
-                          {r.merchant})만 표시되어 무엇을 결제했는지 알 수 없으니 직접 분류해 주세요.
+                          🔍 {r.date || ""}
+                          {r.time ? " " + r.time : ""}에 결제한 내역입니다.
+                          결제대행사(
+                          {r.merchant})만 표시되어 무엇을 결제했는지 알 수
+                          없으니 직접 분류해 주세요.
+                        </div>
+                      )}
+                      {!isGateway && r.suspectGateway && (
+                        <div style={gatewayNote}>
+                          💡 결제대행사(PG)일 수 있는 이름입니다. 맞다면 아래
+                          '결제대행사' 체크를 유지하세요.
                         </div>
                       )}
                     </div>
@@ -437,36 +539,72 @@ export default function Home() {
                     >
                       <optgroup label="Expense">
                         {EXPENSE_CATEGORIES.map((c) => (
-                          <option key={c} value={c}>{c}</option>
+                          <option key={c} value={c}>
+                            {c}
+                          </option>
                         ))}
                       </optgroup>
                       <optgroup label="Travel">
                         {TRAVEL_CATEGORIES.map((c) => (
-                          <option key={c} value={c}>{c}</option>
+                          <option key={c} value={c}>
+                            {c}
+                          </option>
                         ))}
                       </optgroup>
-                      <option value={UNCLASSIFIED}>(미분류 유지 — 나중에)</option>
+                      <option value={UNCLASSIFIED}>
+                        (미분류 유지 — 나중에)
+                      </option>
                     </select>
-                    <label style={learnRow}>
-                      <input
-                        type="checkbox"
-                        checked={isGateway ? false : !!learnChoice[r.id]}
-                        disabled={isGateway}
-                        onChange={(e) => setLearn(r.id, e.target.checked)}
-                      />
-                      <span style={isGateway ? learnTextOff : undefined}>
-                        {isGateway
-                          ? "결제대행 — 학습 불가 (매번 확인)"
-                          : "이 분류를 모두에게 저장 (다음부터 자동)"}
-                      </span>
-                    </label>
+                    {isGateway ? (
+                      <label style={learnRow}>
+                        <input type="checkbox" checked={false} disabled />
+                        <span style={learnTextOff}>
+                          결제대행 — 학습 불가 (매번 확인)
+                        </span>
+                      </label>
+                    ) : (
+                      <>
+                        <label style={learnRow}>
+                          <input
+                            type="checkbox"
+                            checked={!!gatewayChoice[r.id]}
+                            onChange={(e) => setGateway(r.id, e.target.checked)}
+                          />
+                          <span>
+                            이 가맹점은 결제대행사입니다 (다음부터 자동
+                            인식·항상 확인)
+                          </span>
+                        </label>
+                        <label style={learnRow}>
+                          <input
+                            type="checkbox"
+                            checked={
+                              !gatewayChoice[r.id] && !!learnChoice[r.id]
+                            }
+                            disabled={!!gatewayChoice[r.id]}
+                            onChange={(e) => setLearn(r.id, e.target.checked)}
+                          />
+                          <span
+                            style={
+                              gatewayChoice[r.id] ? learnTextOff : undefined
+                            }
+                          >
+                            이 분류를 모두에게 저장 (다음부터 자동)
+                          </span>
+                        </label>
+                      </>
+                    )}
                   </div>
                 );
               })}
             </div>
 
             <div style={modalActions}>
-              <button type="button" style={ghostBtn} onClick={() => setReviewOpen(false)}>
+              <button
+                type="button"
+                style={ghostBtn}
+                onClick={() => setReviewOpen(false)}
+              >
                 닫기
               </button>
               <button type="button" style={primaryBtn} onClick={applyReview}>
@@ -496,8 +634,20 @@ const card: CSSProperties = {
   boxShadow: "0 4px 24px rgba(0,0,0,0.06)",
 };
 const title: CSSProperties = { fontSize: 22, margin: "0 0 8px" };
-const subtitle: CSSProperties = { fontSize: 14, color: "#5f6873", lineHeight: 1.6, marginBottom: 24 };
-const navLink: CSSProperties = { display: "inline-block", marginBottom: 20, fontSize: 14, color: "#2d6cdf", textDecoration: "none", fontWeight: 600 };
+const subtitle: CSSProperties = {
+  fontSize: 14,
+  color: "#5f6873",
+  lineHeight: 1.6,
+  marginBottom: 24,
+};
+const navLink: CSSProperties = {
+  display: "inline-block",
+  marginBottom: 20,
+  fontSize: 14,
+  color: "#2d6cdf",
+  textDecoration: "none",
+  fontWeight: 600,
+};
 const drop: CSSProperties = {
   display: "flex",
   alignItems: "center",
@@ -547,7 +697,12 @@ const statBox: CSSProperties = {
   fontSize: 13,
   lineHeight: 1.9,
 };
-const hint: CSSProperties = { marginTop: 8, fontSize: 12, color: "#8a9099", lineHeight: 1.6 };
+const hint: CSSProperties = {
+  marginTop: 8,
+  fontSize: 12,
+  color: "#8a9099",
+  lineHeight: 1.6,
+};
 const hiddenInput: CSSProperties = { display: "none" };
 const mutedText: CSSProperties = { color: "#8a9099" };
 const warnText: CSSProperties = { color: "#b9770e" };
@@ -585,8 +740,16 @@ const modal: CSSProperties = {
   boxShadow: "0 12px 48px rgba(0,0,0,0.25)",
 };
 const modalTitle: CSSProperties = { fontSize: 18, margin: "0 0 6px" };
-const modalSub: CSSProperties = { fontSize: 13, color: "#5f6873", marginBottom: 16 };
-const reviewList: CSSProperties = { overflowY: "auto", flex: 1, marginBottom: 16 };
+const modalSub: CSSProperties = {
+  fontSize: 13,
+  color: "#5f6873",
+  marginBottom: 16,
+};
+const reviewList: CSSProperties = {
+  overflowY: "auto",
+  flex: 1,
+  marginBottom: 16,
+};
 const sectionLabel: CSSProperties = {
   fontSize: 13,
   fontWeight: 700,
@@ -624,8 +787,16 @@ const reviewItem: CSSProperties = {
 };
 const reviewInfo: CSSProperties = { display: "flex", flexDirection: "column" };
 const reviewMerchant: CSSProperties = { fontSize: 14, fontWeight: 600 };
-const reviewMeta: CSSProperties = { fontSize: 12, color: "#8a9099", marginTop: 2 };
-const reviewQuestion: CSSProperties = { fontSize: 13, color: "#1f2329", marginTop: 4 };
+const reviewMeta: CSSProperties = {
+  fontSize: 12,
+  color: "#8a9099",
+  marginTop: 2,
+};
+const reviewQuestion: CSSProperties = {
+  fontSize: 13,
+  color: "#1f2329",
+  marginTop: 4,
+};
 const gatewayNote: CSSProperties = {
   fontSize: 12,
   color: "#b9770e",
@@ -648,7 +819,11 @@ const learnRow: CSSProperties = {
   cursor: "pointer",
 };
 const learnTextOff: CSSProperties = { color: "#b9770e" };
-const modalActions: CSSProperties = { display: "flex", justifyContent: "flex-end", gap: 8 };
+const modalActions: CSSProperties = {
+  display: "flex",
+  justifyContent: "flex-end",
+  gap: 8,
+};
 const ghostBtn: CSSProperties = {
   padding: "10px 18px",
   borderRadius: 10,
