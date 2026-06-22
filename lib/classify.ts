@@ -9,6 +9,7 @@ import {
 } from "./categories";
 import type { ClassifiedTransaction, Transaction } from "./types";
 import { getLearnedMap, normalizeMerchant } from "./store";
+import { isPaymentGateway } from "./gateways";
 
 // Confidence below this -> we still apply the AI guess but flag it so the user
 // is asked to confirm in the review popup.
@@ -62,7 +63,7 @@ export function classifyDeterministic(
   return null;
 }
 
-// AI fallback. Now instructed to ALWAYS pick the single best category and avoid
+// AI fallback. Instructed to ALWAYS pick the single best category and avoid
 // UNCLASSIFIED unless the merchant text is truly meaningless. Returns a
 // confidence so low-confidence guesses can be sent to the review popup.
 async function classifyByAI(
@@ -140,7 +141,19 @@ export async function classifyAll(transactions: Transaction[]): Promise<Classifi
       category: UNCLASSIFIED,
       source: "none",
       needsReview: true,
+      noLearn: false,
     };
+
+    // Payment-gateway-only rows: we never know the real purchase, so ALWAYS ask
+    // and NEVER learn (skip learned/rule/AI entirely).
+    if (isPaymentGateway(tx.merchant)) {
+      base.source = "gateway";
+      base.noLearn = true;
+      base.needsReview = true;
+      base.confidence = 0;
+      results.push(base);
+      continue;
+    }
 
     const learnedCat = learned[normalizeMerchant(tx.merchant)];
     if (learnedCat && validCats.has(learnedCat)) {
