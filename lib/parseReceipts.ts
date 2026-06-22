@@ -81,7 +81,10 @@ export async function parseReceiptPdf(
 
   try {
     // unpdf 는 워커 없이 메인 스레드에서 동작하는 pdf.js 를 내장한다.
-    const doc: any = await getDocumentProxy(data);
+    // 주의: pdf.js 는 넘겨받은 ArrayBuffer 의 소유권을 가져가며 detach(무효화)한다.
+    // 호출자의 원본 버퍼를 보호하려면 반드시 복사본을 넘겨야 한다. 안 그러면
+    // 같은 바이트를 재사용하는 pdf-lib 쪽에서 "No PDF header found" 로 실패한다.
+    const doc: any = await getDocumentProxy(new Uint8Array(data));
     const receipts: ReceiptInfo[] = [];
 
     for (let p = 0; p < doc.numPages; p++) {

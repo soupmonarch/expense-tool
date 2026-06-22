@@ -1,9 +1,18 @@
 import { NextRequest, NextResponse } from "next/server";
 import JSZip from "jszip";
 import { fillForm, type FormRow } from "@/lib/fillTemplate";
-import { ALL_CATEGORIES, UNCLASSIFIED, groupOf, type Category } from "@/lib/categories";
+import {
+  ALL_CATEGORIES,
+  UNCLASSIFIED,
+  groupOf,
+  type Category,
+} from "@/lib/categories";
 import { parseReceiptPdf } from "@/lib/parseReceipts";
-import { matchReceipts, renderReceiptPdf, type RowMeta } from "@/lib/buildReceiptPdf";
+import {
+  matchReceipts,
+  renderReceiptPdf,
+  type RowMeta,
+} from "@/lib/buildReceiptPdf";
 
 export const runtime = "nodejs";
 export const maxDuration = 120;
@@ -63,12 +72,17 @@ export async function POST(req: NextRequest) {
         merchant: r.merchant,
         cancel: r.cancel,
       };
-      if (r.category && valid.has(r.category) && groupOf(r.category as Category) === "travel") {
+      if (
+        r.category &&
+        valid.has(r.category) &&
+        groupOf(r.category as Category) === "travel"
+      ) {
         travelRows.push(form);
         travelMeta.push(meta);
       } else {
         // Expense 또는 미분류는 Expense 파일로 (미분류는 표시).
-        if (!(r.category && valid.has(r.category))) form.category = UNCLASSIFIED;
+        if (!(r.category && valid.has(r.category)))
+          form.category = UNCLASSIFIED;
         expenseRows.push(form);
         expenseMeta.push(meta);
       }
@@ -91,16 +105,26 @@ export async function POST(req: NextRequest) {
         const reportLines: string[] = [];
         reportLines.push("영수증 PDF 처리 리포트");
         reportLines.push("=====================");
-        reportLines.push("원본 페이지: " + parsed.pageCount + ", 인식된 영수증: " + parsed.receipts.length);
+        reportLines.push(
+          "원본 페이지: " +
+            parsed.pageCount +
+            ", 인식된 영수증: " +
+            parsed.receipts.length,
+        );
 
         if (parsed.error) {
           reportLines.push("⚠️ " + parsed.error);
           zip.file("영수증_리포트.txt", reportLines.join("\n"));
         } else {
-          const summary = matchReceipts(expenseMeta, travelMeta, parsed.receipts);
+          const summary = matchReceipts(
+            expenseMeta,
+            travelMeta,
+            parsed.receipts,
+          );
+          // 각 호출에 독립 복사본을 넘긴다(버퍼 detach/공유 문제 방지).
           const [expensePdf, travelPdf] = await Promise.all([
-            renderReceiptPdf(receiptBytes, summary.expense),
-            renderReceiptPdf(receiptBytes, summary.travel),
+            renderReceiptPdf(new Uint8Array(receiptBytes), summary.expense),
+            renderReceiptPdf(new Uint8Array(receiptBytes), summary.travel),
           ]);
           zip.file("Expense_Receipts.pdf", expensePdf);
           zip.file("Travel_Receipts.pdf", travelPdf);
@@ -127,7 +151,9 @@ export async function POST(req: NextRequest) {
           if (summary.leftover.length > 0) {
             reportLines.push("");
             reportLines.push(
-              "⚠️ 어느 행에도 매칭되지 않아 제외된 영수증 " + summary.leftover.length + "장:",
+              "⚠️ 어느 행에도 매칭되지 않아 제외된 영수증 " +
+                summary.leftover.length +
+                "장:",
             );
             for (const lo of summary.leftover) {
               reportLines.push(
@@ -163,6 +189,9 @@ export async function POST(req: NextRequest) {
     });
   } catch (err: any) {
     console.error(err);
-    return NextResponse.json({ error: err?.message || "Generation failed" }, { status: 500 });
+    return NextResponse.json(
+      { error: err?.message || "Generation failed" },
+      { status: 500 },
+    );
   }
 }
