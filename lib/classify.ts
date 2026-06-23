@@ -15,6 +15,15 @@ import { isPaymentGateway, looksLikeGateway } from "./gateways";
 // is asked to confirm in the review popup.
 const REVIEW_THRESHOLD = 0.7;
 
+// AI 진단 정보 — 분류 화면에서 AI가 실제로 동작했는지/실패 원인을 보여주기 위함.
+export interface AiDiagnostic {
+  status: "ok" | "disabled_no_key" | "empty_result" | "error";
+  model?: string;
+  attempted: number; // AI에 보낸 미분류 건수
+  classified: number; // AI가 실제로 분류해준 건수
+  message?: string;
+}
+
 // AI sometimes returns a category whose casing/spacing/punctuation differs from
 // the exact canonical string (e.g. "KR-Telephone Expenses" vs the canonical
 // "KR-TELEPHONE EXPENSES"), which previously caused valid guesses to be silently
@@ -93,20 +102,30 @@ export function classifyDeterministic(
 // AI fallback. Instructed to ALWAYS pick the single best category and avoid
 // UNCLASSIFIED unless the merchant text is truly meaningless. Returns a
 // confidence so low-confidence guesses can be sent to the review popup.
-async function classifyByAI(
-  unknowns: Transaction[],
-): Promise<
-  Map<number, { category: Category | "UNCLASSIFIED"; confidence: number }>
-> {
+async function classifyByAI(unknowns: Transaction[]): Promise<{
+  out: Map<number, { category: Category | "UNCLASSIFIED"; confidence: number }>;
+  diag: AiDiagnostic;
+}> {
   const out = new Map<
     number,
     { category: Category | "UNCLASSIFIED"; confidence: number }
   >();
+  const model = process.env.OPENAI_MODEL || "gpt-4o-mini";
+  const diag: AiDiagnostic = {
+    status: "ok",
+    model,
+    attempted: unknowns.length,
+    classified: 0,
+  };
   const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey || unknowns.length === 0) return out;
+  if (!apiKey) {
+    diag.status = "disabled_no_key";
+    diag.message = "OPENAI_API_KEY 환경변수가 설정되지 않았습니다.";
+    return { out, diag };
+  }
+  if (unknowns.length === 0) return { out, diag };
 
   const client = new OpenAI({ apiKey });
-  const model = process.env.OPENAI_MODEL || "gpt-4o-mini";
 
   const items = unknowns.map((t) => ({
     id: t.rowIndex,
@@ -152,21 +171,31 @@ async function classifyByAI(
           category: resolved,
           confidence: r.confidence ?? 0.5,
         });
+        diag.classified++;
       } else if (normalizeCategoryKey(r.category) === "unclassified") {
         out.set(r.id, { category: UNCLASSIFIED, confidence: 0 });
       }
     }
-  } catch (err) {
+    if (out.size === 0) {
+      diag.status = "empty_result";
+      diag.message =
+        "AI가 호출됐지만 사용할 수 있는 분류 결과를 반환하지 않았습니다.";
+    }
+  } catch (err: any) {
     console.error("AI classification failed:", err);
+    diag.status = "error";
+    diag.message = String(err?.message || err) || "알 수 없는 오류";
   }
-  return out;
+  return { out, diag };
 }
 
-export async function classifyAll(
-  transactions: Transaction[],
-): Promise<ClassifiedTransaction[]> {
+export async function classifyAll(transactions: Transaction[]): Promise<{
+  results: ClassifiedTransaction[];
+  ai: AiDiagnostic;
+}> {
   const results: ClassifiedTransaction[] = [];
   const unknowns: Transaction[] = [];
+  let ai: AiDiagnostic = { status: "ok", attempted: 0, classified: 0 };
 
   // Shared learned mappings take top priority (human-confirmed truth).
   const [learned, learnedGateways] = await Promise.all([
@@ -239,7 +268,8 @@ export async function classifyAll(
   }
 
   if (unknowns.length > 0) {
-    const aiMap = await classifyByAI(unknowns);
+    const { out: aiMap, diag } = await classifyByAI(unknowns);
+    ai = diag;
     for (const res of results) {
       if (res.source !== "none") continue;
       const ai = aiMap.get(res.rowIndex);
@@ -256,5 +286,5 @@ export async function classifyAll(
     }
   }
 
-  return results;
+  return { results, ai };
 }

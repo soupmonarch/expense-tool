@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import JSZip from "jszip";
+import { PDFDocument } from "pdf-lib";
 import { fillForm, type FormRow } from "@/lib/fillTemplate";
 import {
   ALL_CATEGORIES,
@@ -16,6 +17,17 @@ import {
 
 export const runtime = "nodejs";
 export const maxDuration = 120;
+
+// 여러 개의 영수증 PDF를 페이지 순서대로 하나로 합친다(카드사 페이지 분할 대응).
+async function mergePdfs(parts: Uint8Array[]): Promise<Uint8Array> {
+  const out = await PDFDocument.create();
+  for (const p of parts) {
+    const src = await PDFDocument.load(p);
+    const pages = await out.copyPages(src, src.getPageIndices());
+    for (const pg of pages) out.addPage(pg);
+  }
+  return await out.save();
+}
 
 interface IncomingRow {
   date?: string;
@@ -40,9 +52,15 @@ export async function POST(req: NextRequest) {
       const form = await req.formData();
       const rowsRaw = form.get("rows");
       if (typeof rowsRaw === "string") rows = JSON.parse(rowsRaw);
-      const rf = form.get("receipts");
-      if (rf instanceof File && rf.size > 0) {
-        receiptBytes = new Uint8Array(await rf.arrayBuffer());
+      const rfs = form
+        .getAll("receipts")
+        .filter((f): f is File => f instanceof File && f.size > 0);
+      if (rfs.length === 1) {
+        receiptBytes = new Uint8Array(await rfs[0].arrayBuffer());
+      } else if (rfs.length > 1) {
+        const parts: Uint8Array[] = [];
+        for (const f of rfs) parts.push(new Uint8Array(await f.arrayBuffer()));
+        receiptBytes = await mergePdfs(parts);
       }
     } else {
       const body = (await req.json()) as { rows?: IncomingRow[] };

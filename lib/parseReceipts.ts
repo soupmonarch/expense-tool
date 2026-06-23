@@ -9,12 +9,17 @@
 // 중요: pdf.js 는 글자를 잘게 쪼개 여러 텍스트 조각으로 돌려주는 경우가 많다
 // (예: "승","인","번","호"). 따라서 조각들을 공백 없이 이어 붙인 뒤 매칭한다.
 
+import type { Transaction } from "./types";
+
 export interface ReceiptInfo {
   page: number; // 0-based 원본 페이지 인덱스
   side: "L" | "R"; // 좌/우 영수증
   approval: string; // 승인번호(숫자만, 선행 0 제거). 없으면 ""
   merchant: string; // 가맹점명(보고/취소 매칭용)
-  amount: number; // 거래금액(원). 추출 실패 시 0
+  amount: number; // 거래금액(원, 절댓값). 추출 실패 시 0
+  date?: string; // 거래일시의 날짜 (예: 2026.03.27)
+  time?: string; // 거래일시의 시각 (HH:mm)
+  canceled: boolean; // 취소/환불 영수증이면 true
   hasContent: boolean;
 }
 
@@ -44,6 +49,9 @@ function extractFields(joined: string): {
   approval: string;
   merchant: string;
   amount: number;
+  date?: string;
+  time?: string;
+  canceled: boolean;
 } {
   let approval = "";
   const am = joined.match(/승인번호([0-9]{4,12})/);
@@ -57,9 +65,26 @@ function extractFields(joined: string): {
 
   let amount = 0;
   const amt = joined.match(/거래금액(-?[0-9,]+)원/);
-  if (amt) amount = num(amt[1]);
+  if (amt) amount = Math.abs(num(amt[1]));
 
-  return { approval, merchant, amount };
+  // 거래일시: 공백을 제거한 텍스트라 날짜와 시각이 붙어 있다(예: 2026.03.2717:27).
+  let date: string | undefined;
+  let time: string | undefined;
+  const dm = joined.match(
+    /거래일시(?:\(DateTime\))?(\d{4}[.\-/]\d{1,2}[.\-/]\d{1,2})(\d{1,2}:\d{2})?/,
+  );
+  if (dm) {
+    date = dm[1];
+    if (dm[2]) time = dm[2];
+  }
+
+  // 취소/환불 영수증 감지: 거래금액이 음수이거나 취소 관련 거래유형이 보일 때.
+  const negative = /거래금액-[0-9,]+원/.test(joined);
+  const canceled =
+    negative ||
+    /(신용취소|매입취소|승인취소|취소승인|매출취소|환불)/.test(joined);
+
+  return { approval, merchant, amount, date, time, canceled };
 }
 
 export async function parseReceiptPdf(
@@ -140,6 +165,9 @@ export async function parseReceiptPdf(
           approval: f.approval,
           merchant: f.merchant,
           amount: f.amount,
+          date: f.date,
+          time: f.time,
+          canceled: f.canceled,
           hasContent: true,
         });
       }
@@ -164,4 +192,25 @@ export async function parseReceiptPdf(
       error: "영수증 PDF 파싱 실패: " + (e?.message || e),
     };
   }
+}
+
+// PDF만 모드: 파싱한 영수증들을 분류 파이프라인이 쓰는 Transaction 으로 변환한다.
+// 취소 영수증은 rawAmount 를 음수로 만들어 reconcileCancellations 가 자동
+// 차감하도록 한다. rowIndex 는 호출부에서 전역 고유값으로 재부여한다.
+export function receiptsToTransactions(receipts: ReceiptInfo[]): Transaction[] {
+  return receipts.map((r, i) => {
+    const amt = Math.abs(r.amount);
+    return {
+      rowIndex: i,
+      date: r.date,
+      time: r.time,
+      merchant: r.merchant || "",
+      amount: amt,
+      rawAmount: r.canceled ? -amt : amt,
+      currency: "KRW",
+      isForeign: false,
+      canceled: r.canceled,
+      approval: r.approval || undefined,
+    };
+  });
 }

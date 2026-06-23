@@ -29,6 +29,7 @@ interface Row {
   confidence: number | null;
   cancelAmount: number | null;
   needsReview: boolean;
+  needsManual: boolean;
   noLearn: boolean;
   suspectGateway: boolean;
 }
@@ -53,6 +54,16 @@ interface Stats {
   autoVoided: number;
   voidedAmount: number;
   cancelQuestions: number;
+  duplicatesRemoved?: number;
+  mode?: string;
+}
+
+interface AiDiagnostic {
+  status: "ok" | "disabled_no_key" | "empty_result" | "error";
+  model?: string;
+  attempted: number;
+  classified: number;
+  message?: string;
 }
 
 // heuristic: "full"(전액취소 제외) | "separate"(별개 건 유지)
@@ -74,14 +85,16 @@ function fmt(n: number): string {
 }
 
 export default function Home() {
-  const [file, setFile] = useState<File | null>(null);
+  const [mode, setMode] = useState<"excel" | "pdf" | "both">("excel");
+  const [files, setFiles] = useState<File[]>([]);
   const [dragOver, setDragOver] = useState(false);
-  const [receiptFile, setReceiptFile] = useState<File | null>(null);
+  const [receiptFiles, setReceiptFiles] = useState<File[]>([]);
   const [receiptDragOver, setReceiptDragOver] = useState(false);
   const [loading, setLoading] = useState(false);
   const [downloading, setDownloading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState(false);
+  const [aiDiag, setAiDiag] = useState<AiDiagnostic | null>(null);
 
   const [rows, setRows] = useState<Row[] | null>(null);
   const [stats, setStats] = useState<Stats | null>(null);
@@ -109,35 +122,64 @@ export default function Home() {
     [rows],
   );
 
-  function pickFile(f: File | null) {
-    setFile(f);
+  const canClassify =
+    mode === "excel"
+      ? files.length > 0
+      : mode === "pdf"
+        ? receiptFiles.length > 0
+        : files.length > 0 && receiptFiles.length > 0;
+
+  function resetResults() {
     setRows(null);
     setStats(null);
     setError(null);
     setDone(false);
+    setAiDiag(null);
     setCancelQuestions([]);
     setCancelChoice({});
     setLearnChoice({});
     setGatewayChoice({});
   }
 
+  function addExcelFiles(list: FileList | null) {
+    if (!list || list.length === 0) return;
+    setFiles((prev) => [...prev, ...Array.from(list)]);
+    resetResults();
+  }
+  function addReceiptFiles(list: FileList | null) {
+    if (!list || list.length === 0) return;
+    setReceiptFiles((prev) => [...prev, ...Array.from(list)]);
+    resetResults();
+  }
+  function removeExcelFile(i: number) {
+    setFiles((prev) => prev.filter((_, idx) => idx !== i));
+    resetResults();
+  }
+  function removeReceiptFile(i: number) {
+    setReceiptFiles((prev) => prev.filter((_, idx) => idx !== i));
+    resetResults();
+  }
+
   function onDrop(e: DragEvent<HTMLLabelElement>) {
     e.preventDefault();
     setDragOver(false);
-    const f = e.dataTransfer.files?.[0];
-    if (f) pickFile(f);
+    addExcelFiles(e.dataTransfer.files);
   }
 
   async function classify() {
-    if (!file) return;
+    if (!canClassify) return;
     setLoading(true);
     setError(null);
     setDone(false);
+    setAiDiag(null);
     setRows(null);
     setStats(null);
     try {
       const fd = new FormData();
-      fd.append("file", file);
+      fd.append("mode", mode);
+      if (mode !== "pdf") for (const f of files) fd.append("file", f);
+      if (mode !== "excel")
+        for (const f of receiptFiles) fd.append("receipts", f);
       const res = await fetch("/api/classify", { method: "POST", body: fd });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || `Failed (${res.status})`);
@@ -147,6 +189,7 @@ export default function Home() {
       setRows(newRows);
       setStats(data.stats);
       setPersistent(!!data.persistent);
+      setAiDiag(data.aiDiagnostic || null);
       setCancelQuestions(questions);
 
       // 기본값: 휴리스틱 추정은 전액취소(제외), 고아 환불은 제외.
@@ -189,6 +232,19 @@ export default function Home() {
     );
   }
 
+  function setRowField(
+    id: number,
+    field: "merchant" | "amount" | "date",
+    value: string,
+  ) {
+    setRows((prev) =>
+      (prev || []).map((r) =>
+        r.id === id
+          ? { ...r, [field]: field === "amount" ? Number(value) || 0 : value }
+          : r,
+      ),
+    );
+  }
   function setCancel(id: number, choice: CancelChoice) {
     setCancelChoice((p) => ({ ...p, [id]: choice }));
   }
@@ -305,7 +361,8 @@ export default function Home() {
       const payload = finalizeRows();
       const fd = new FormData();
       fd.append("rows", JSON.stringify(payload));
-      if (receiptFile) fd.append("receipts", receiptFile);
+      if (mode !== "excel")
+        for (const f of receiptFiles) fd.append("receipts", f);
       const res = await fetch("/api/generate", { method: "POST", body: fd });
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
@@ -343,66 +400,129 @@ export default function Home() {
           📚 지금까지 학습된 분류 데이터 보기 · 관리 →
         </a>
 
-        <label
-          style={dragOver ? dropActive : drop}
-          onDragOver={(e) => {
-            e.preventDefault();
-            setDragOver(true);
-          }}
-          onDragLeave={() => setDragOver(false)}
-          onDrop={onDrop}
-        >
-          <input
-            ref={inputRef}
-            type="file"
-            accept=".xls,.xlsx,.csv"
-            onChange={(e) => pickFile(e.target.files?.[0] ?? null)}
-            style={hiddenInput}
-          />
-          {file ? (
-            <span>📎 {file.name}</span>
-          ) : (
-            <span style={mutedText}>
-              여기로 카드 승인내역(엑셀)을 끌어다 놓거나 클릭해서 선택하세요
-            </span>
-          )}
-        </label>
+        <div style={modeRow}>
+          {(
+            [
+              ["excel", "📊 엑셀만"],
+              ["pdf", "🧾 영수증 PDF만"],
+              ["both", "📊+🧾 둘 다"],
+            ] as const
+          ).map(([m, label]) => (
+            <button
+              key={m}
+              type="button"
+              style={mode === m ? modeBtnActive : modeBtn}
+              onClick={() => {
+                setMode(m);
+                resetResults();
+              }}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+        <p style={modeHint}>
+          {mode === "excel"
+            ? "카드 승인내역 엑셀만으로 작성합니다(기존 방식). 영수증 없이 양식만 생성."
+            : mode === "pdf"
+              ? "영수증 PDF만으로 작성합니다. 영수증의 거래일시·가맹점·금액·승인번호를 자동으로 읽어 분류합니다."
+              : "엑셀로 작성하고, 영수증 PDF를 엑셀 순번에 맞추어 함께 정리합니다(기존 방식)."}
+        </p>
 
-        <label
-          style={receiptDragOver ? dropActive : drop}
-          onDragOver={(e) => {
-            e.preventDefault();
-            setReceiptDragOver(true);
-          }}
-          onDragLeave={() => setReceiptDragOver(false)}
-          onDrop={(e) => {
-            e.preventDefault();
-            setReceiptDragOver(false);
-            const f = e.dataTransfer.files?.[0];
-            if (f) setReceiptFile(f);
-          }}
-        >
-          <input
-            type="file"
-            accept=".pdf"
-            onChange={(e) => setReceiptFile(e.target.files?.[0] ?? null)}
-            style={hiddenInput}
-          />
-          {receiptFile ? (
-            <span>🧾 {receiptFile.name}</span>
-          ) : (
-            <span style={mutedText}>
-              (선택) 영수증 PDF를 끌어다 놓거나 클릭해서 첨부 — 엑셀 순번에 맞춰
-              한 페이지씩 정리합니다
-            </span>
-          )}
-        </label>
+        {mode !== "pdf" && (
+          <>
+            <label
+              style={dragOver ? dropActive : drop}
+              onDragOver={(e) => {
+                e.preventDefault();
+                setDragOver(true);
+              }}
+              onDragLeave={() => setDragOver(false)}
+              onDrop={onDrop}
+            >
+              <input
+                ref={inputRef}
+                type="file"
+                accept=".xls,.xlsx,.csv"
+                multiple
+                onChange={(e) => addExcelFiles(e.target.files)}
+                style={hiddenInput}
+              />
+              <span style={mutedText}>
+                카드 승인내역 엑셀을 끌어다 놓거나 클릭해서 선택 (여러 개 가능)
+              </span>
+            </label>
+            {files.length > 0 && (
+              <div style={fileList}>
+                {files.map((f, i) => (
+                  <div key={i} style={fileChip}>
+                    <span>📎 {f.name}</span>
+                    <button
+                      type="button"
+                      style={removeBtn}
+                      onClick={() => removeExcelFile(i)}
+                    >
+                      ✕
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </>
+        )}
+
+        {mode !== "excel" && (
+          <>
+            <label
+              style={receiptDragOver ? dropActive : drop}
+              onDragOver={(e) => {
+                e.preventDefault();
+                setReceiptDragOver(true);
+              }}
+              onDragLeave={() => setReceiptDragOver(false)}
+              onDrop={(e) => {
+                e.preventDefault();
+                setReceiptDragOver(false);
+                addReceiptFiles(e.dataTransfer.files);
+              }}
+            >
+              <input
+                type="file"
+                accept=".pdf"
+                multiple
+                onChange={(e) => addReceiptFiles(e.target.files)}
+                style={hiddenInput}
+              />
+              <span style={mutedText}>
+                {mode === "pdf"
+                  ? "영수증 PDF를 끌어다 놓거나 클릭해서 첨부 (여러 개 가능)"
+                  : "영수증 PDF를 끌어다 놓거나 클릭해서 첨부 — 엑셀 순번에 맞춰 정리 (여러 개 가능)"}
+              </span>
+            </label>
+            {receiptFiles.length > 0 && (
+              <div style={fileList}>
+                {receiptFiles.map((f, i) => (
+                  <div key={i} style={fileChip}>
+                    <span>🧾 {f.name}</span>
+                    <button
+                      type="button"
+                      style={removeBtn}
+                      onClick={() => removeReceiptFile(i)}
+                    >
+                      ✕
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </>
+        )}
 
         <button
           type="button"
           onClick={classify}
-          disabled={!file || loading}
-          style={button(!file || loading)}
+          disabled={!canClassify || loading}
+          style={button(!canClassify || loading)}
         >
           {loading ? "분류 중…" : "분류하기"}
         </button>
@@ -412,6 +532,12 @@ export default function Home() {
         {stats && (
           <div style={statBox}>
             <div>✅ 총 {fmt(stats.total)}건 분류 완료</div>
+            {!!stats.duplicatesRemoved && stats.duplicatesRemoved > 0 && (
+              <div style={mutedText}>
+                🧹 중복 {fmt(stats.duplicatesRemoved)}건 자동 제거(여러 파일
+                합침)
+              </div>
+            )}
             <div>
               💳 총 <b>{fmt(totalUsed)}원</b> 사용 · 결제 {fmt(stats.total)}건
               {stats.voidedAmount > 0
@@ -422,6 +548,25 @@ export default function Home() {
               🧾 Expense: {fmt(stats.expense)}건 · ✈️ Travel:{" "}
               {fmt(stats.travel)}건
             </div>
+            {aiDiag && aiDiag.attempted > 0 && aiDiag.status === "ok" && (
+              <div style={mutedText}>
+                🤖 AI 분류 {fmt(aiDiag.classified)}/{fmt(aiDiag.attempted)}건
+                {aiDiag.model ? ` (${aiDiag.model})` : ""}
+              </div>
+            )}
+            {aiDiag && aiDiag.status === "disabled_no_key" && (
+              <div style={warnText}>
+                ⚠️ AI 미작동 — 서버에 OPENAI_API_KEY가 설정되지 않았습니다.
+              </div>
+            )}
+            {aiDiag && aiDiag.status === "error" && (
+              <div style={warnText}>⚠️ AI 오류 — {aiDiag.message}</div>
+            )}
+            {aiDiag && aiDiag.status === "empty_result" && (
+              <div style={warnText}>
+                ⚠️ AI가 호출됐지만 분류 결과를 반환하지 않았습니다.
+              </div>
+            )}
             {stats.autoVoided > 0 && (
               <div style={mutedText}>
                 ↩️ 취소·환불 {fmt(stats.autoVoided)}건
@@ -463,7 +608,7 @@ export default function Home() {
           >
             {downloading
               ? "생성 중…"
-              : receiptFile
+              : mode !== "excel" && receiptFiles.length > 0
                 ? "다운로드 (엑셀 2개 + 영수증 PDF 2개)"
                 : "엑셀 다운로드 (Expense + Travel)"}
           </button>
@@ -614,6 +759,39 @@ export default function Home() {
                         </div>
                       )}
                     </div>
+                    {r.needsManual && (
+                      <div style={manualBox}>
+                        <div style={manualLabel}>
+                          ✏️ 영수증에서 자동으로 읽지 못한 정보입니다. 직접
+                          입력해 주세요.
+                        </div>
+                        <input
+                          style={manualInput}
+                          placeholder="가맹점명"
+                          defaultValue={r.merchant}
+                          onChange={(e) =>
+                            setRowField(r.id, "merchant", e.target.value)
+                          }
+                        />
+                        <input
+                          style={manualInput}
+                          type="number"
+                          placeholder="금액"
+                          defaultValue={r.amount || ""}
+                          onChange={(e) =>
+                            setRowField(r.id, "amount", e.target.value)
+                          }
+                        />
+                        <input
+                          style={manualInput}
+                          placeholder="날짜 (예: 2026.03.27)"
+                          defaultValue={r.date}
+                          onChange={(e) =>
+                            setRowField(r.id, "date", e.target.value)
+                          }
+                        />
+                      </div>
+                    )}
                     <select
                       style={select}
                       value={r.category}
@@ -935,4 +1113,82 @@ const primaryBtn: CSSProperties = {
   fontSize: 14,
   fontWeight: 600,
   cursor: "pointer",
+};
+
+const modeRow: CSSProperties = {
+  display: "flex",
+  gap: 8,
+  marginBottom: 8,
+  flexWrap: "wrap",
+};
+const modeBtn: CSSProperties = {
+  flex: "1 1 0",
+  minWidth: 120,
+  padding: "10px 12px",
+  borderRadius: 10,
+  border: "1px solid #d7dbe0",
+  background: "#fff",
+  color: "#3a4149",
+  fontSize: 13,
+  fontWeight: 600,
+  cursor: "pointer",
+};
+const modeBtnActive: CSSProperties = {
+  ...modeBtn,
+  border: "1px solid #2d6cdf",
+  background: "#eef3fd",
+  color: "#2d6cdf",
+};
+const modeHint: CSSProperties = {
+  margin: "0 0 12px",
+  fontSize: 12.5,
+  color: "#8a9099",
+  lineHeight: 1.5,
+};
+const fileList: CSSProperties = {
+  display: "flex",
+  flexDirection: "column",
+  gap: 6,
+  marginTop: 8,
+};
+const fileChip: CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "space-between",
+  gap: 8,
+  padding: "8px 10px",
+  borderRadius: 8,
+  background: "#f3f5f7",
+  fontSize: 13,
+  color: "#3a4149",
+};
+const removeBtn: CSSProperties = {
+  border: "none",
+  background: "transparent",
+  color: "#8a9099",
+  fontSize: 15,
+  lineHeight: 1,
+  cursor: "pointer",
+  padding: 2,
+};
+const manualBox: CSSProperties = {
+  display: "flex",
+  flexDirection: "column",
+  gap: 6,
+  padding: "8px 10px",
+  marginTop: 6,
+  borderRadius: 8,
+  background: "#fff7e6",
+  border: "1px solid #f0d28a",
+};
+const manualLabel: CSSProperties = {
+  fontSize: 12,
+  color: "#b9770e",
+  fontWeight: 600,
+};
+const manualInput: CSSProperties = {
+  padding: "7px 9px",
+  borderRadius: 7,
+  border: "1px solid #d7dbe0",
+  fontSize: 13,
 };
