@@ -13,7 +13,10 @@ export interface Transaction {
   merchantCategory?: string; // 가맹점업종명 (MCC name)
   isForeign?: boolean;
   canceled?: boolean; // 취소 건 여부 (취소 정산에서 사용)
+  preauth?: boolean; // 가승인(pre-auth) 건 → 정산에서 자동 제외
   approval?: string; // 승인번호 (영수증 PDF 매칭 키)
+  rawAmount?: number; // 부호 보존 금액(음수=취소/환불/가승인). amount는 절댓값.
+  cancelAmount?: number; // 자동 부분취소가 반영된 결제의 연결 취소액(절댓값) — 영수증 페어링용
   raw?: Record<string, unknown>;
 }
 

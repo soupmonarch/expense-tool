@@ -121,6 +121,10 @@ export async function renderReceiptPdf(
   const src = await PDFDocument.load(srcBytes);
   const out = await PDFDocument.create();
 
+  // 영수증 이미지는 절반 크기로 축소해 배치한다(사용자 요청).
+  const SCALE = 0.5;
+  const GAP = 16;
+
   for (const group of plan.pages) {
     const embeds = [];
     for (const half of group) {
@@ -136,18 +140,32 @@ export async function renderReceiptPdf(
     }
 
     if (embeds.length === 1) {
+      // 단일 영수증: 원본 한 면 크기 페이지에 50%로 상단 중앙 배치(여백 확보).
       const e = embeds[0];
+      const w = e.width * SCALE;
+      const h = e.height * SCALE;
       const np = out.addPage([e.width, e.height]);
-      np.drawPage(e, { x: 0, y: 0, width: e.width, height: e.height });
+      np.drawPage(e, {
+        x: (e.width - w) / 2,
+        y: e.height - h,
+        width: w,
+        height: h,
+      });
     } else {
-      // 구매(좌) + 취소(우)를 나란히 한 페이지에
-      const h = Math.max(...embeds.map((e) => e.height));
-      const totalW = embeds.reduce((a, e) => a + e.width, 0);
+      // 구매(좌) + 취소(우)를 각각 50%로 줄여 한 페이지에 나란히.
+      const scaled = embeds.map((e) => ({
+        e,
+        w: e.width * SCALE,
+        h: e.height * SCALE,
+      }));
+      const h = Math.max(...scaled.map((s) => s.h));
+      const totalW =
+        scaled.reduce((a, s) => a + s.w, 0) + GAP * (scaled.length - 1);
       const np = out.addPage([totalW, h]);
       let x = 0;
-      for (const e of embeds) {
-        np.drawPage(e, { x, y: 0, width: e.width, height: e.height });
-        x += e.width;
+      for (const s of scaled) {
+        np.drawPage(s.e, { x, y: h - s.h, width: s.w, height: s.h });
+        x += s.w + GAP;
       }
     }
   }

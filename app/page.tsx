@@ -27,19 +27,22 @@ interface Row {
   category: string;
   source: string;
   confidence: number | null;
+  cancelAmount: number | null;
   needsReview: boolean;
   noLearn: boolean;
   suspectGateway: boolean;
 }
 
 interface CancelQuestion {
-  paymentId: number;
+  id: number;
+  kind: "heuristic" | "orphan";
   merchant: string;
-  paymentAmount: number;
   cancelAmount: number;
-  proposedNet: number;
-  paymentDate?: string;
   cancelDate?: string;
+  cancelTime?: string;
+  paymentId?: number;
+  paymentAmount?: number;
+  paymentDate?: string;
 }
 
 interface Stats {
@@ -51,7 +54,9 @@ interface Stats {
   cancelQuestions: number;
 }
 
-type CancelChoice = "partial" | "full" | "separate";
+// heuristic: "full"(전액취소 제외) | "separate"(별개 건 유지)
+// orphan:    "exclude"(제외) | "include"(음수로 포함)
+type CancelChoice = "full" | "separate" | "exclude" | "include";
 
 interface Payload {
   date: string;
@@ -135,9 +140,10 @@ export default function Home() {
       setPersistent(!!data.persistent);
       setCancelQuestions(questions);
 
-      // Default: treat each cancellation as a partial refund (net amount).
+      // 기본값: 휴리스틱 추정은 전액취소(제외), 고아 환불은 제외.
       const cc: Record<number, CancelChoice> = {};
-      for (const q of questions) cc[q.paymentId] = "partial";
+      for (const q of questions)
+        cc[q.id] = q.kind === "orphan" ? "exclude" : "full";
       setCancelChoice(cc);
 
       // Default: learn every reviewed row except gateway (no-learn) rows.
@@ -227,7 +233,15 @@ export default function Home() {
 
   // Apply confirmed cancellation choices to produce the final payload rows.
   function finalizeRows(): Payload[] {
-    const qById = new Map(cancelQuestions.map((q) => [q.paymentId, q]));
+    // 휴리스틱 질문: 추정 매칭된 원결제(paymentId)에 대한 결정.
+    const heuristicByPayment = new Map<number, CancelQuestion>();
+    const orphans: CancelQuestion[] = [];
+    for (const q of cancelQuestions) {
+      if (q.kind === "heuristic" && q.paymentId !== undefined)
+        heuristicByPayment.set(q.paymentId, q);
+      else if (q.kind === "orphan") orphans.push(q);
+    }
+
     const out: Payload[] = [];
     for (const r of rows || []) {
       const base: Payload = {
@@ -238,25 +252,38 @@ export default function Home() {
         category: r.category,
         approval: r.approval,
       };
-      const q = qById.get(r.id);
-      if (q) {
-        const choice = cancelChoice[r.id] || "partial";
-        if (choice === "full") continue; // fully canceled -> drop
-        if (choice === "partial") {
-          const net = Math.max(0, r.amount - q.cancelAmount);
-          if (net <= 0) continue;
-          // 부분취소: 순액으로 합산하고 구매+취소 영수증을 한 페이지에 함께 붙인다.
-          out.push({
-            ...base,
-            amount: net,
-            cancel: { amount: q.cancelAmount },
-          });
-          continue;
-        }
-        // "separate" -> keep the full original amount
+
+      // 자동 부분취소가 반영된 결제: 금액은 이미 순액, 구매+취소 영수증을 함께 붙인다.
+      if (r.cancelAmount && r.cancelAmount > 0) {
+        out.push({ ...base, cancel: { amount: r.cancelAmount } });
+        continue;
       }
+
+      // 휴리스틱 추정으로 취소가 의심되는 결제
+      const hq = heuristicByPayment.get(r.id);
+      if (hq) {
+        const choice = cancelChoice[hq.id] || "full";
+        if (choice === "full") continue; // 전액취소로 보고 제외
+        // "separate" -> 원래 금액 그대로 유지
+      }
+
       out.push(base);
     }
+
+    // 고아 환불: 사용자가 '음수로 포함'을 선택한 건만 음수 금액 행으로 추가
+    for (const q of orphans) {
+      if ((cancelChoice[q.id] || "exclude") === "include") {
+        out.push({
+          date: q.cancelDate || "",
+          merchant: q.merchant,
+          amount: -Math.abs(q.cancelAmount),
+          currency: "KRW",
+          category: UNCLASSIFIED,
+          approval: "",
+        });
+      }
+    }
+
     return out;
   }
 
@@ -445,39 +472,66 @@ export default function Home() {
               {cancelQuestions.length > 0 && (
                 <div style={sectionLabel}>↩️ 취소·환불 확인</div>
               )}
-              {cancelQuestions.map((q) => (
-                <div key={"c" + q.paymentId} style={reviewItem}>
-                  <div style={reviewInfo}>
-                    <div style={reviewMerchant}>
-                      {q.merchant || "(가맹점명 없음)"}
+              {cancelQuestions.map((q) =>
+                q.kind === "heuristic" ? (
+                  <div key={"c" + q.id} style={reviewItem}>
+                    <div style={reviewInfo}>
+                      <div style={reviewMerchant}>
+                        {q.merchant || "(가맹점명 없음)"}
+                      </div>
+                      <div style={reviewMeta}>
+                        결제 {fmt(q.paymentAmount || 0)}원
+                        {q.paymentDate ? " (" + q.paymentDate + ")" : ""} · 취소{" "}
+                        {fmt(q.cancelAmount)}원
+                        {q.cancelDate ? " (" + q.cancelDate + ")" : ""}
+                      </div>
+                      <div style={reviewQuestion}>
+                        승인번호가 달라 추정한 매칭입니다. 같은 가맹점·같은
+                        금액의 취소로 보이는데, 이 결제의 취소가 맞나요?
+                      </div>
                     </div>
-                    <div style={reviewMeta}>
-                      결제 {fmt(q.paymentAmount)}원
-                      {q.paymentDate ? " (" + q.paymentDate + ")" : ""} · 취소{" "}
-                      {fmt(q.cancelAmount)}원
-                      {q.cancelDate ? " (" + q.cancelDate + ")" : ""}
-                    </div>
-                    <div style={reviewQuestion}>
-                      이 결제 건의 취소(환불)가 맞나요?
-                    </div>
+                    <select
+                      style={select}
+                      value={cancelChoice[q.id] || "full"}
+                      onChange={(e) =>
+                        setCancel(q.id, e.target.value as CancelChoice)
+                      }
+                    >
+                      <option value="full">전액취소가 맞음 — 제외</option>
+                      <option value="separate">
+                        별개 건임 — 결제 {fmt(q.paymentAmount || 0)}원 그대로
+                      </option>
+                    </select>
                   </div>
-                  <select
-                    style={select}
-                    value={cancelChoice[q.paymentId] || "partial"}
-                    onChange={(e) =>
-                      setCancel(q.paymentId, e.target.value as CancelChoice)
-                    }
-                  >
-                    <option value="partial">
-                      부분취소 — 최종 {fmt(q.proposedNet)}원으로 합산
-                    </option>
-                    <option value="full">전액취소 — 제외(0원)</option>
-                    <option value="separate">
-                      별개 건 — 결제 {fmt(q.paymentAmount)}원 그대로
-                    </option>
-                  </select>
-                </div>
-              ))}
+                ) : (
+                  <div key={"c" + q.id} style={reviewItem}>
+                    <div style={reviewInfo}>
+                      <div style={reviewMerchant}>
+                        {q.merchant || "(가맹점명 없음)"}
+                      </div>
+                      <div style={reviewMeta}>
+                        환불·취소 {fmt(q.cancelAmount)}원
+                        {q.cancelDate ? " (" + q.cancelDate + ")" : ""}
+                      </div>
+                      <div style={reviewQuestion}>
+                        원결제가 이번 명세서에 없는 환불입니다. 어떻게 할까요?
+                      </div>
+                    </div>
+                    <select
+                      style={select}
+                      value={cancelChoice[q.id] || "exclude"}
+                      onChange={(e) =>
+                        setCancel(q.id, e.target.value as CancelChoice)
+                      }
+                    >
+                      <option value="exclude">제외 (청구하지 않음)</option>
+                      <option value="include">
+                        음수로 포함 (−{fmt(q.cancelAmount)}원)
+                      </option>
+                    </select>
+                  </div>
+                ),
+              )}
 
               {reviewRows.length > 0 && (
                 <div style={sectionRow}>

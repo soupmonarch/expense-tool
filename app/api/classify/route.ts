@@ -67,6 +67,7 @@ export async function POST(req: NextRequest) {
       category: t.category,
       source: t.source,
       confidence: t.confidence ?? null,
+      cancelAmount: t.cancelAmount ?? null,
       needsReview: !!t.needsReview,
       noLearn: !!t.noLearn,
       suspectGateway: !!t.suspectGateway,
