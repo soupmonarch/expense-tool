@@ -51,6 +51,7 @@ interface Stats {
   travel: number;
   needsReview: number;
   autoVoided: number;
+  voidedAmount: number;
   cancelQuestions: number;
 }
 
@@ -80,6 +81,7 @@ export default function Home() {
   const [loading, setLoading] = useState(false);
   const [downloading, setDownloading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [done, setDone] = useState(false);
 
   const [rows, setRows] = useState<Row[] | null>(null);
   const [stats, setStats] = useState<Stats | null>(null);
@@ -102,11 +104,17 @@ export default function Home() {
     [rows],
   );
 
+  const totalUsed = useMemo(
+    () => (rows || []).reduce((s, r) => s + (r.amount > 0 ? r.amount : 0), 0),
+    [rows],
+  );
+
   function pickFile(f: File | null) {
     setFile(f);
     setRows(null);
     setStats(null);
     setError(null);
+    setDone(false);
     setCancelQuestions([]);
     setCancelChoice({});
     setLearnChoice({});
@@ -124,6 +132,7 @@ export default function Home() {
     if (!file) return;
     setLoading(true);
     setError(null);
+    setDone(false);
     setRows(null);
     setStats(null);
     try {
@@ -291,6 +300,7 @@ export default function Home() {
     if (!rows) return;
     setDownloading(true);
     setError(null);
+    setDone(false);
     try {
       const payload = finalizeRows();
       const fd = new FormData();
@@ -308,6 +318,7 @@ export default function Home() {
       a.download = "expense_claims.zip";
       a.click();
       URL.revokeObjectURL(url);
+      setDone(true);
     } catch (err: any) {
       setError(err?.message || "Download failed");
     } finally {
@@ -402,12 +413,22 @@ export default function Home() {
           <div style={statBox}>
             <div>✅ 총 {fmt(stats.total)}건 분류 완료</div>
             <div>
+              💳 총 <b>{fmt(totalUsed)}원</b> 사용 · 결제 {fmt(stats.total)}건
+              {stats.voidedAmount > 0
+                ? ` (취소·환불 ${fmt(stats.voidedAmount)}원 제외)`
+                : ""}
+            </div>
+            <div>
               🧾 Expense: {fmt(stats.expense)}건 · ✈️ Travel:{" "}
               {fmt(stats.travel)}건
             </div>
             {stats.autoVoided > 0 && (
               <div style={mutedText}>
-                ↩️ 취소·환불 {fmt(stats.autoVoided)}건 자동 반영(제외)
+                ↩️ 취소·환불 {fmt(stats.autoVoided)}건
+                {stats.voidedAmount > 0
+                  ? ` · ${fmt(stats.voidedAmount)}원`
+                  : ""}{" "}
+                자동 반영(제외)
               </div>
             )}
             {remainingReview > 0 || cancelQuestions.length > 0 ? (
@@ -448,6 +469,13 @@ export default function Home() {
           </button>
         )}
 
+        {done && (
+          <div style={doneBox}>
+            🎉 다운로드가 완료됐습니다! 제출 전에 생성된 Expense·Travel 양식을
+            한 번씩 검토해 주세요.
+          </div>
+        )}
+
         <p style={hint}>
           💡 분류가 애매하거나 취소·환불이 있는 항목은 확인 창이 뜨고, 항목별로
           체크한 분류는 서버에 저장돼 다음부터 ��두에게 자동 적용됩니다
@@ -486,7 +514,7 @@ export default function Home() {
                         {q.cancelDate ? " (" + q.cancelDate + ")" : ""}
                       </div>
                       <div style={reviewQuestion}>
-                        승인번호가 달라 추정한 매칭입니다. 같은 가맹점·같은
+                        승인번호가 달라 ���정한 매칭입니다. 같은 가맹점·같은
                         금액의 취소로 보이는데, 이 결제의 취소가 맞나요?
                       </div>
                     </div>
@@ -750,6 +778,17 @@ const statBox: CSSProperties = {
   background: "#f3f5f8",
   fontSize: 13,
   lineHeight: 1.9,
+};
+const doneBox: CSSProperties = {
+  marginTop: 4,
+  marginBottom: 12,
+  padding: 14,
+  borderRadius: 8,
+  background: "#eaf7ee",
+  color: "#1e874b",
+  fontSize: 13,
+  lineHeight: 1.6,
+  border: "1px solid #bfe6cb",
 };
 const hint: CSSProperties = {
   marginTop: 8,

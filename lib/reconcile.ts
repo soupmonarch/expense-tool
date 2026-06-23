@@ -33,6 +33,7 @@ export interface ReconcileResult {
   payments: Transaction[]; // 분류 대상이 되는 살아남은 결제 건
   questions: CancelQuestion[];
   autoVoided: number; // 자동 제외된 건 수(전액취소 + 가승인 등)
+  voidedAmount: number; // 자동 정산으로 제외·차감된 취소·환불 총액(원)
 }
 
 const TOLERANCE = 1; // 원 단위 반올림 오차 허용
@@ -56,6 +57,14 @@ export function reconcileCancellations(
   const consumed = new Set<number>(); // 제외/그룹처리된 rowIndex
   const questions: CancelQuestion[] = [];
   let autoVoided = 0;
+
+  // 자동 정산으로 차감·제외된 취소·환불 총액 계산용: 전체 양수 결제합 대비
+  // 살아남은 결제합의 차이(부분취소 차감분 + 전액취소분 포함).
+  let grossPositive = 0;
+  for (const t of transactions) {
+    const s = signed(t);
+    if (s > 0) grossPositive += s;
+  }
 
   // 자동 부분취소 결과(살아남은 결제에 반영)
   const netAmount = new Map<number, number>(); // rowIndex -> 순액
@@ -193,5 +202,14 @@ export function reconcileCancellations(
       };
     });
 
-  return { payments: surviving, questions, autoVoided };
+  const survivingPositive = surviving.reduce(
+    (s, t) => s + Math.max(0, t.amount),
+    0,
+  );
+  const voidedAmount = Math.max(
+    0,
+    Math.round(grossPositive - survivingPositive),
+  );
+
+  return { payments: surviving, questions, autoVoided, voidedAmount };
 }

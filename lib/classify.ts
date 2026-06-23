@@ -15,6 +15,28 @@ import { isPaymentGateway, looksLikeGateway } from "./gateways";
 // is asked to confirm in the review popup.
 const REVIEW_THRESHOLD = 0.7;
 
+// AI sometimes returns a category whose casing/spacing/punctuation differs from
+// the exact canonical string (e.g. "KR-Telephone Expenses" vs the canonical
+// "KR-TELEPHONE EXPENSES"), which previously caused valid guesses to be silently
+// dropped to UNCLASSIFIED. Match tolerantly against the allowed list.
+function normalizeCategoryKey(s: string): string {
+  return String(s || "")
+    .toLowerCase()
+    .replace(/^\s*kr[\s\-:]*/, "")
+    .replace(/[\s\-_/]+/g, " ")
+    .trim();
+}
+
+const CATEGORY_BY_NORM: Map<string, Category> = new Map(
+  ALL_CATEGORIES.map((c) => [normalizeCategoryKey(c), c] as [string, Category]),
+);
+
+function resolveAICategory(raw: string | undefined | null): Category | null {
+  if (!raw) return null;
+  if ((ALL_CATEGORIES as string[]).includes(raw)) return raw as Category;
+  return CATEGORY_BY_NORM.get(normalizeCategoryKey(raw)) ?? null;
+}
+
 function resolveTravel(subtype: TravelSubtype, foreign: boolean): Category {
   switch (subtype) {
     case "airfare":
@@ -123,14 +145,14 @@ async function classifyByAI(
     const parsed = JSON.parse(resp.choices[0]?.message?.content || "{}") as {
       results?: { id: number; category: string; confidence?: number }[];
     };
-    const valid = new Set<string>(ALL_CATEGORIES);
     for (const r of parsed.results || []) {
-      if (valid.has(r.category)) {
+      const resolved = resolveAICategory(r.category);
+      if (resolved) {
         out.set(r.id, {
-          category: r.category as Category,
+          category: resolved,
           confidence: r.confidence ?? 0.5,
         });
-      } else if (r.category === UNCLASSIFIED) {
+      } else if (normalizeCategoryKey(r.category) === "unclassified") {
         out.set(r.id, { category: UNCLASSIFIED, confidence: 0 });
       }
     }

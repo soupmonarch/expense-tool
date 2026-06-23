@@ -48,7 +48,7 @@ export async function POST(req: NextRequest) {
     }
 
     // Net out cancellations against original payments before classifying.
-    const { payments, questions, autoVoided } =
+    const { payments, questions, autoVoided, voidedAmount } =
       reconcileCancellations(transactions);
 
     const classified = await classifyAll(payments);
@@ -79,6 +79,7 @@ export async function POST(req: NextRequest) {
       travel: classified.filter((t) => t.group === "travel").length,
       needsReview: classified.filter((t) => t.needsReview).length,
       autoVoided,
+      voidedAmount,
       cancelQuestions: questions.length,
     };
 
