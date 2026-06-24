@@ -85,7 +85,7 @@ function fmt(n: number): string {
 }
 
 export default function Home() {
-  const [mode, setMode] = useState<"excel" | "pdf" | "both">("excel");
+  const [mode, setMode] = useState<"excel" | "pdf" | "both">("both");
   const [files, setFiles] = useState<File[]>([]);
   const [dragOver, setDragOver] = useState(false);
   const [receiptFiles, setReceiptFiles] = useState<File[]>([]);
@@ -403,9 +403,9 @@ export default function Home() {
         <div style={modeRow}>
           {(
             [
+              ["both", "📊+🧾 둘 다 (권장)"],
               ["excel", "📊 엑셀만"],
               ["pdf", "🧾 영수증 PDF만"],
-              ["both", "📊+🧾 둘 다"],
             ] as const
           ).map(([m, label]) => (
             <button
