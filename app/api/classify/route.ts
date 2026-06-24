@@ -81,6 +81,7 @@ export async function POST(req: NextRequest) {
 
     // 여러 파일을 합쳤으므로 rowIndex 를 전역 고유로 재부여한 뒤 중복 제거한다.
     transactions = transactions.map((t, i) => ({ ...t, rowIndex: i }));
+    const rawCount = transactions.length;
     const { unique, removed } = dedupeTransactions(transactions);
     unique.forEach((t, i) => {
       t.rowIndex = i;
@@ -143,6 +144,8 @@ export async function POST(req: NextRequest) {
       voidedAmount,
       cancelQuestions: questions.length,
       duplicatesRemoved: removed,
+      filesProcessed: mode === "pdf" ? pdfFiles.length : excelFiles.length,
+      rawCount,
       mode,
     };
 

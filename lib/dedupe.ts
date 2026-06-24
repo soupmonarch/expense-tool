@@ -24,12 +24,23 @@ export function dedupeTransactions(txs: Transaction[]): {
   const seen = new Set<string>();
   const unique: Transaction[] = [];
   let removed = 0;
+  let autoId = 0;
   for (const t of txs) {
     const appr = approvalDigits(t);
     const amt = Math.round(signedOf(t));
-    const key = appr
-      ? `a:${appr}|${amt}`
-      : `m:${(t.merchant || "").trim()}|${amt}|${t.date || ""}|${t.time || ""}`;
+    const merchant = (t.merchant || "").trim();
+    let key: string;
+    if (appr) {
+      // 승인번호가 있으면 가장 신뢰할 수 있는 키(결제/취소는 부호로 구분).
+      key = `a:${appr}|${amt}`;
+    } else if (merchant && amt !== 0 && (t.date || t.time)) {
+      // 승인번호가 없을 때는 가맹점·금액·일시가 모두 있을 때만 같은 거래로 본다.
+      key = `m:${merchant}|${amt}|${t.date || ""}|${t.time || ""}`;
+    } else {
+      // 식별 정보가 부족한 행(영수증 인식 실패 등)은 절대 합치지 않는다.
+      // (이전 버전은 이런 행들을 빈 키 하나로 합쳐 여러 건이 1건으로 사라졌다)
+      key = `u:${autoId++}`;
+    }
     if (seen.has(key)) {
       removed++;
       continue;

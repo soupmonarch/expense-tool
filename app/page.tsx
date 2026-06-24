@@ -55,6 +55,8 @@ interface Stats {
   voidedAmount: number;
   cancelQuestions: number;
   duplicatesRemoved?: number;
+  filesProcessed?: number;
+  rawCount?: number;
   mode?: string;
 }
 
@@ -234,7 +236,7 @@ export default function Home() {
 
   function setRowField(
     id: number,
-    field: "merchant" | "amount" | "date",
+    field: "merchant" | "amount" | "date" | "time",
     value: string,
   ) {
     setRows((prev) =>
@@ -532,12 +534,22 @@ export default function Home() {
         {stats && (
           <div style={statBox}>
             <div>✅ 총 {fmt(stats.total)}건 분류 완료</div>
-            {!!stats.duplicatesRemoved && stats.duplicatesRemoved > 0 && (
+            {!!stats.filesProcessed && stats.filesProcessed > 1 && (
               <div style={mutedText}>
-                🧹 중복 {fmt(stats.duplicatesRemoved)}건 자동 제거(여러 파일
-                합침)
+                📎 파일 {fmt(stats.filesProcessed)}개에서 원본{" "}
+                {fmt(stats.rawCount ?? stats.total)}건 읽음
+                {stats.duplicatesRemoved && stats.duplicatesRemoved > 0
+                  ? ` · 중복 ${fmt(stats.duplicatesRemoved)}건 제거`
+                  : " · 중복 없음"}
               </div>
             )}
+            {(!stats.filesProcessed || stats.filesProcessed <= 1) &&
+              !!stats.duplicatesRemoved &&
+              stats.duplicatesRemoved > 0 && (
+                <div style={mutedText}>
+                  🧹 중복 {fmt(stats.duplicatesRemoved)}건 자동 제거
+                </div>
+              )}
             <div>
               💳 총 <b>{fmt(totalUsed)}원</b> 사용 · 결제 {fmt(stats.total)}건
               {stats.voidedAmount > 0
@@ -599,6 +611,31 @@ export default function Home() {
           </div>
         )}
 
+        {rows && rows.length > 0 && (
+          <details style={listDetails}>
+            <summary style={listSummary}>
+              📋 전체 내역 보기 ({fmt(rows.length)}건) · 날짜·시간·가맹점·금액
+            </summary>
+            <div style={listWrap}>
+              {rows.map((r) => (
+                <div key={r.id} style={listRow}>
+                  <span style={listDate}>
+                    {r.date || "날짜?"}
+                    {r.time ? " " + r.time : ""}
+                  </span>
+                  <span style={listMerchant}>
+                    {r.merchant || "(가맹점명 없음)"}
+                  </span>
+                  <span style={listAmount}>
+                    {fmt(r.amount)} {r.currency}
+                  </span>
+                  <span style={listCat}>{r.category}</span>
+                </div>
+              ))}
+            </div>
+          </details>
+        )}
+
         {rows && (
           <button
             type="button"
@@ -634,7 +671,7 @@ export default function Home() {
             <h2 style={modalTitle}>확인이 필요한 항목</h2>
             <p style={modalSub}>
               아래 항목들을 확인해 주세요. 취소·환불 여부와 분류를 정하면
-              ���대로 엑셀에 반영됩니다.
+              ���대로 ���셀에 반영됩니다.
             </p>
 
             <div style={reviewList}>
@@ -788,6 +825,14 @@ export default function Home() {
                           defaultValue={r.date}
                           onChange={(e) =>
                             setRowField(r.id, "date", e.target.value)
+                          }
+                        />
+                        <input
+                          style={manualInput}
+                          placeholder="시간 (예: 17:27)"
+                          defaultValue={r.time}
+                          onChange={(e) =>
+                            setRowField(r.id, "time", e.target.value)
                           }
                         />
                       </div>
@@ -1191,4 +1236,58 @@ const manualInput: CSSProperties = {
   borderRadius: 7,
   border: "1px solid #d7dbe0",
   fontSize: 13,
+};
+const listDetails: CSSProperties = {
+  border: "1px solid #e6e8eb",
+  borderRadius: 10,
+  background: "#fff",
+  padding: "4px 8px",
+};
+const listSummary: CSSProperties = {
+  cursor: "pointer",
+  fontSize: 13,
+  fontWeight: 600,
+  color: "#37474f",
+  padding: "6px 2px",
+};
+const listWrap: CSSProperties = {
+  display: "flex",
+  flexDirection: "column",
+  gap: 2,
+  marginTop: 4,
+  maxHeight: 280,
+  overflowY: "auto",
+};
+const listRow: CSSProperties = {
+  display: "flex",
+  gap: 8,
+  alignItems: "baseline",
+  fontSize: 12.5,
+  padding: "4px 2px",
+  borderTop: "1px solid #f0f2f4",
+};
+const listDate: CSSProperties = {
+  color: "#78909c",
+  whiteSpace: "nowrap",
+  fontVariantNumeric: "tabular-nums",
+  minWidth: 116,
+};
+const listMerchant: CSSProperties = {
+  flex: 1,
+  color: "#263238",
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+  whiteSpace: "nowrap",
+};
+const listAmount: CSSProperties = {
+  color: "#263238",
+  whiteSpace: "nowrap",
+  fontVariantNumeric: "tabular-nums",
+};
+const listCat: CSSProperties = {
+  color: "#90a4ae",
+  whiteSpace: "nowrap",
+  maxWidth: 120,
+  overflow: "hidden",
+  textOverflow: "ellipsis",
 };
