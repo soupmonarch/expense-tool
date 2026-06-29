@@ -15,9 +15,33 @@ interface Entry {
   group: string;
 }
 
+interface HistoryItem {
+  key: string;
+  merchant: string;
+  category: string;
+  by: string;
+  at: string;
+  source?: string;
+}
+
 function csvCell(v: string): string {
   const s = String(v ?? "");
   return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+}
+
+// ISO 타임스탬프를 한국 시각(KST) 짧은 표기로 변환.
+function fmtAt(iso: string): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return iso;
+  return d.toLocaleString("ko-KR", {
+    timeZone: "Asia/Seoul",
+    year: "2-digit",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
 }
 
 function CategorySelect(props: {
@@ -53,6 +77,8 @@ function CategorySelect(props: {
 export default function LearnedPage() {
   const [entries, setEntries] = useState<Entry[]>([]);
   const [gateways, setGateways] = useState<Gateway[]>([]);
+  const [history, setHistory] = useState<HistoryItem[]>([]);
+  const [userName, setUserName] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [persistent, setPersistent] = useState(false);
@@ -78,6 +104,7 @@ export default function LearnedPage() {
       if (!res.ok) throw new Error(data?.error || "불러오기 실패");
       setEntries(data.entries || []);
       setGateways(data.gateways || []);
+      setHistory(data.history || []);
       setPersistent(!!data.persistent);
     } catch (e: any) {
       setError(e?.message || "불러오기 실패");
@@ -88,6 +115,12 @@ export default function LearnedPage() {
 
   useEffect(() => {
     load();
+    try {
+      const saved = localStorage.getItem("expense_tool_user_name");
+      if (saved) setUserName(saved);
+    } catch {
+      /* ignore */
+    }
   }, []);
 
   const filtered = useMemo(() => {
@@ -100,6 +133,13 @@ export default function LearnedPage() {
     );
   }, [entries, q]);
 
+  // 가맹점별 최근 분류자(history는 최신순이므로 첫 등장이 최신).
+  const latestBy = useMemo(() => {
+    const m = new Map<string, HistoryItem>();
+    for (const h of history) if (!m.has(h.key)) m.set(h.key, h);
+    return m;
+  }, [history]);
+
   const expenseCount = entries.filter((e) => e.group === "expense").length;
   const travelCount = entries.filter((e) => e.group === "travel").length;
 
@@ -111,10 +151,19 @@ export default function LearnedPage() {
     }
     setSaving(true);
     try {
+      try {
+        localStorage.setItem("expense_tool_user_name", userName.trim());
+      } catch {
+        /* ignore */
+      }
       const res = await fetch("/api/learn", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ merchant, category: addCategory }),
+        body: JSON.stringify({
+          merchant,
+          category: addCategory,
+          by: userName.trim(),
+        }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error || "추가 실패");
@@ -145,7 +194,12 @@ export default function LearnedPage() {
       const res = await fetch("/api/learn", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ oldMerchant, merchant, category: editCategory }),
+        body: JSON.stringify({
+          oldMerchant,
+          merchant,
+          category: editCategory,
+          by: userName.trim(),
+        }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error || "수정 실패");
@@ -302,6 +356,12 @@ export default function LearnedPage() {
               onChange={setAddCategory}
               style={addSelect}
             />
+            <input
+              style={addInput}
+              placeholder="작성자 이름(선택)"
+              value={userName}
+              onChange={(e) => setUserName(e.target.value)}
+            />
             <button style={addBtn} disabled={saving} onClick={addEntry}>
               추가
             </button>
@@ -348,6 +408,7 @@ export default function LearnedPage() {
                 <th style={th}>가맹점(정규화)</th>
                 <th style={th}>분류</th>
                 <th style={thC}>그룹</th>
+                <th style={thC}>최근 분류자</th>
                 <th style={thC}>관리</th>
               </tr>
             </thead>
@@ -388,6 +449,18 @@ export default function LearnedPage() {
                           {e.group}
                         </span>
                       )}
+                    </td>
+                    <td style={tdByCell}>
+                      {(() => {
+                        const h = latestBy.get(e.merchant);
+                        if (!h) return <span style={dash}>—</span>;
+                        return (
+                          <span style={byCell}>
+                            <b>{h.by || "익명"}</b>
+                            <span style={byDate}>{fmtAt(h.at)}</span>
+                          </span>
+                        );
+                      })()}
                     </td>
                     <td style={tdC}>
                       {editing ? (
@@ -447,7 +520,7 @@ export default function LearnedPage() {
             체크하거나 위 목록에서 '결제대행사로' 버튼을 누르면 여기 추가됩니다.
           </p>
           {gateways.length === 0 ? (
-            <p style={muted}>아직 등록된 결제대행사가 없습니다.</p>
+            <p style={muted}>아직 등록�� 결제대행사가 없습니다.</p>
           ) : (
             <table style={table}>
               <thead>
@@ -476,9 +549,44 @@ export default function LearnedPage() {
           )}
         </div>
 
+        <div style={histWrap}>
+          <h2 style={gwTitle}>📜 분류 기록 · 최근 {history.length}건</h2>
+          <p style={subtitle}>
+            누가 어떤 가맹점을 어떤 분류로 확정했는지 시간순으로 보여줍니다(공용
+            저장소 기준, 최신순). 검토 팝업이나 여기서 분류할 때 입력한 작성자
+            이름이 함께 기록됩니다.
+          </p>
+          {history.length === 0 ? (
+            <p style={muted}>아직 기록이 없습니다.</p>
+          ) : (
+            <table style={table}>
+              <thead>
+                <tr>
+                  <th style={th}>일시</th>
+                  <th style={th}>분류자</th>
+                  <th style={th}>가맹점</th>
+                  <th style={th}>분류</th>
+                </tr>
+              </thead>
+              <tbody>
+                {history.map((h, i) => (
+                  <tr key={h.at + "_" + i}>
+                    <td style={td}>{fmtAt(h.at)}</td>
+                    <td style={td}>{h.by || "익명"}</td>
+                    <td style={td}>{h.merchant}</td>
+                    <td style={tdCat}>
+                      {h.category === "__GATEWAY__" ? "결제대행사" : h.category}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+
         <p style={hint}>
           수정은 분류뿐 아니라 가맹점명도 바꿀 수 있습니다(이름을 바꿀 경우 기존
-          항목은 자동으로 옮겨집니다). 모든 변경은 공유 저장소에 즉시 반영되어
+          항목은 자동으로 ���겨집니다). 모든 변경은 공유 저장소에 즉시 반영되어
           전체 사용자에게 적용됩니다. 원본 데이터는 Vercel → Storage →
           KV(Upstash) 데이터 브라우저의 해시{" "}
           <code>expense_merchant_categories</code> 에서도 볼 수 있습니다.
@@ -488,6 +596,20 @@ export default function LearnedPage() {
   );
 }
 
+const histWrap: CSSProperties = { marginTop: 28 };
+const tdByCell: CSSProperties = {
+  padding: "8px 10px",
+  borderBottom: "1px solid #eef0f3",
+  textAlign: "center",
+  fontSize: 12,
+};
+const byCell: CSSProperties = {
+  display: "flex",
+  flexDirection: "column",
+  gap: 2,
+  alignItems: "center",
+};
+const byDate: CSSProperties = { fontSize: 11, color: "#9aa1a9" };
 const wrap: CSSProperties = {
   minHeight: "100vh",
   background: "#f4f5f7",

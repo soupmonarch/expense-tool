@@ -134,3 +134,61 @@ export async function deleteLearnedGateway(merchant: string): Promise<void> {
   }
   gatewayMemory.delete(key);
 }
+
+// ---------------------------------------------------------------------------
+// 분류 기록(감사 로그): 누가 어떤 가맹점을 어떤 분류로 확정했는지 시간순으로 남긴다.
+// 개별 로그인 대신 공용 비밀번호를 쓰므로 작성자(by)는 사용자가 입력한 이름이다.
+// Vercel KV(Upstash Redis) 리스트에 최신순(lpush)으로 쌓고 최대 MAX_HISTORY건 유지한다.
+// ---------------------------------------------------------------------------
+const HISTORY_KEY = "expense_classify_history";
+const MAX_HISTORY = 1000;
+const historyMemory: HistoryEntry[] = [];
+
+export interface HistoryEntry {
+  key: string; // 정규화된 가맹점 키 (entries.merchant 와 매칭)
+  merchant: string; // 원본 가맹점 표기
+  category: string; // 확정 분류 (또는 "__GATEWAY__")
+  by: string; // 작성자 이름 (빈 값이면 UI에서 '익명' 처리)
+  at: string; // ISO 타임스탬프
+  source?: string; // "review" | "manual" | "gateway" 등
+}
+
+// 분류 기록 한 건을 추가한다. 저장 실패해도 양식 생성 흐름을 막지 않도록 조용히 실패한다.
+export async function appendHistory(
+  entry: Omit<HistoryEntry, "key" | "at"> & { at?: string },
+): Promise<void> {
+  const e: HistoryEntry = {
+    key: normalizeMerchant(entry.merchant),
+    merchant: entry.merchant,
+    category: entry.category,
+    by: (entry.by || "").trim(),
+    at: entry.at || new Date().toISOString(),
+    source: entry.source,
+  };
+  if (!e.key) return;
+  if (kvEnabled()) {
+    try {
+      await kv.lpush(HISTORY_KEY, e);
+      await kv.ltrim(HISTORY_KEY, 0, MAX_HISTORY - 1);
+      return;
+    } catch (err) {
+      console.error("KV history write failed, using memory:", err);
+    }
+  }
+  historyMemory.unshift(e);
+  if (historyMemory.length > MAX_HISTORY) historyMemory.length = MAX_HISTORY;
+}
+
+// 최신순 분류 기록을 반환한다(관리 페이지 표시용).
+export async function getHistory(limit = 200): Promise<HistoryEntry[]> {
+  const n = Math.max(1, Math.min(limit, MAX_HISTORY));
+  if (kvEnabled()) {
+    try {
+      const list = await kv.lrange<HistoryEntry>(HISTORY_KEY, 0, n - 1);
+      return Array.isArray(list) ? list : [];
+    } catch (err) {
+      console.error("KV history read failed, using memory:", err);
+    }
+  }
+  return historyMemory.slice(0, n);
+}

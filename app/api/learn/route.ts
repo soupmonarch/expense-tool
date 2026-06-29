@@ -8,6 +8,8 @@ import {
   deleteLearnedGateway,
   normalizeMerchant,
   kvEnabled,
+  appendHistory,
+  getHistory,
 } from "@/lib/store";
 import { ALL_CATEGORIES, groupOf, type Category } from "@/lib/categories";
 import { isPaymentGateway, PSP_MARK } from "@/lib/gateways";
@@ -22,9 +24,10 @@ interface LearnItem {
 // GET: 누적된 공유 학습 데이터(가맹점 -> 분류) 전체를 반환한다.
 // 관리 페이지(/learned)에서 조회·검색·CSV 내보내기에 사용.
 export async function GET() {
-  const [map, gatewayMap] = await Promise.all([
+  const [map, gatewayMap, history] = await Promise.all([
     getLearnedMap(),
     getLearnedGatewayMap(),
+    getHistory(300),
   ]);
   const valid = new Set<string>(ALL_CATEGORIES);
   const entries = Object.entries(map)
@@ -40,6 +43,7 @@ export async function GET() {
   return NextResponse.json({
     entries,
     gateways,
+    history,
     count: entries.length,
     gatewayCount: gateways.length,
     persistent: kvEnabled(),
@@ -54,9 +58,11 @@ export async function POST(req: NextRequest) {
     const body = (await req.json()) as {
       items?: LearnItem[];
       gateways?: string[];
+      by?: string;
     };
     const items = Array.isArray(body.items) ? body.items : [];
     const gateways = Array.isArray(body.gateways) ? body.gateways : [];
+    const by = (body.by || "").trim();
     const valid = new Set<string>(ALL_CATEGORIES);
 
     let saved = 0;
@@ -69,6 +75,12 @@ export async function POST(req: NextRequest) {
         continue;
       }
       await saveLearned(it.merchant, it.category);
+      await appendHistory({
+        merchant: it.merchant,
+        category: it.category,
+        by,
+        source: "review",
+      });
       saved++;
     }
 
@@ -78,6 +90,12 @@ export async function POST(req: NextRequest) {
       const name = typeof g === "string" ? g.trim() : "";
       if (!name) continue;
       await saveLearnedGateway(name);
+      await appendHistory({
+        merchant: name,
+        category: PSP_MARK,
+        by,
+        source: "gateway",
+      });
       savedGateways++;
     }
 
@@ -105,9 +123,11 @@ export async function PUT(req: NextRequest) {
       oldMerchant?: string;
       merchant?: string;
       category?: string;
+      by?: string;
     };
     const merchant = (body.merchant || "").trim();
     const category = (body.category || "").trim();
+    const by = (body.by || "").trim();
     const valid = new Set<string>(ALL_CATEGORIES);
 
     if (!merchant) {
@@ -125,6 +145,12 @@ export async function PUT(req: NextRequest) {
         await deleteLearned(body.oldMerchant);
       }
       await saveLearnedGateway(merchant);
+      await appendHistory({
+        merchant,
+        category: PSP_MARK,
+        by,
+        source: "manual",
+      });
       return NextResponse.json({
         ok: true,
         gateway: true,
@@ -152,6 +178,7 @@ export async function PUT(req: NextRequest) {
       await deleteLearned(body.oldMerchant);
     }
     await saveLearned(merchant, category);
+    await appendHistory({ merchant, category, by, source: "manual" });
 
     return NextResponse.json({ ok: true, persistent: kvEnabled() });
   } catch (err: any) {

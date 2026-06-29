@@ -1,6 +1,6 @@
 {
   "name": "expense-claim-tool",
-  "version": "1.9.3",
+  "version": "1.9.4",
   "private": true,
   "description": "Card statement -> Expense & Travel claim form generator (rule-first + AI + shared learning)",
   "scripts": {

@@ -46,6 +46,45 @@ function resolveAICategory(raw: string | undefined | null): Category | null {
   return CATEGORY_BY_NORM.get(normalizeCategoryKey(raw)) ?? null;
 }
 
+// AI 프롬프트용 few-shot 예시 생성. 사람이 확정한 학습 매핑(회사 고유 관례)을
+// unknown 가맹점명과 토큰이 겹치는 것 위주로 최대 MAX_FEWSHOT개 골라 AI에게 제시한다.
+// 관련 사례가 적으면 점수 0인 사례로 채워 전반적인 회사 분류 성향도 반영한다.
+const MAX_FEWSHOT = 40;
+
+function tokenize(s: string): string[] {
+  return String(s || "")
+    .toLowerCase()
+    .split(/[^a-z0-9\uac00-\ud7a3]+/)
+    .filter((t) => t.length >= 2);
+}
+
+function buildFewShotExamples(
+  unknowns: Transaction[],
+  learned: Record<string, string>,
+): string {
+  const entries = Object.entries(learned).filter(
+    ([, cat]) => cat && (ALL_CATEGORIES as string[]).includes(cat),
+  );
+  if (entries.length === 0) return "";
+
+  const unknownTokens = new Set<string>();
+  for (const u of unknowns)
+    for (const t of tokenize(u.merchant)) unknownTokens.add(t);
+
+  const scored = entries.map(([merchant, category]) => {
+    let score = 0;
+    for (const t of tokenize(merchant)) if (unknownTokens.has(t)) score++;
+    return { merchant, category, score };
+  });
+
+  // 관련도 높은 순 → 최대 MAX_FEWSHOT개.
+  scored.sort((a, b) => b.score - a.score);
+  return scored
+    .slice(0, MAX_FEWSHOT)
+    .map((p) => `- "${p.merchant}" => ${p.category}`)
+    .join("\n");
+}
+
 function resolveTravel(subtype: TravelSubtype, foreign: boolean): Category {
   switch (subtype) {
     case "airfare":
@@ -102,7 +141,10 @@ export function classifyDeterministic(
 // AI fallback. Instructed to ALWAYS pick the single best category and avoid
 // UNCLASSIFIED unless the merchant text is truly meaningless. Returns a
 // confidence so low-confidence guesses can be sent to the review popup.
-async function classifyByAI(unknowns: Transaction[]): Promise<{
+async function classifyByAI(
+  unknowns: Transaction[],
+  learned: Record<string, string>,
+): Promise<{
   out: Map<number, { category: Category | "UNCLASSIFIED"; confidence: number }>;
   diag: AiDiagnostic;
 }> {
@@ -127,6 +169,8 @@ async function classifyByAI(unknowns: Transaction[]): Promise<{
 
   const client = new OpenAI({ apiKey });
 
+  const fewShot = buildFewShotExamples(unknowns, learned);
+
   const items = unknowns.map((t) => ({
     id: t.rowIndex,
     merchant: t.merchant,
@@ -145,8 +189,14 @@ async function classifyByAI(unknowns: Transaction[]): Promise<{
       UNCLASSIFIED +
       '" if the merchant text is empty or pure gibberish.',
     "Set confidence honestly: 0.9+ when obvious, 0.4-0.6 when it is an educated guess.",
+    fewShot
+      ? "Company-confirmed examples \u2014 mimic these conventions when a merchant looks similar:\n" +
+        fewShot
+      : "",
     "Allowed categories:\n" + ALL_CATEGORIES.map((c) => "- " + c).join("\n"),
-  ].join("\n");
+  ]
+    .filter(Boolean)
+    .join("\n");
   const user =
     'Classify each transaction. Return JSON {"results":[{"id":number,"category":string,"confidence":0..1}]}.\n' +
     JSON.stringify(items);
@@ -268,7 +318,7 @@ export async function classifyAll(transactions: Transaction[]): Promise<{
   }
 
   if (unknowns.length > 0) {
-    const { out: aiMap, diag } = await classifyByAI(unknowns);
+    const { out: aiMap, diag } = await classifyByAI(unknowns, learned);
     ai = diag;
     for (const res of results) {
       if (res.source !== "none") continue;

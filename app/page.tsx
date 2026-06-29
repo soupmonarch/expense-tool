@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  useEffect,
   useMemo,
   useRef,
   useState,
@@ -101,6 +102,16 @@ export default function Home() {
   const [rows, setRows] = useState<Row[] | null>(null);
   const [stats, setStats] = useState<Stats | null>(null);
   const [persistent, setPersistent] = useState(false);
+  const [userName, setUserName] = useState("");
+
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem("expense_tool_user_name");
+      if (saved) setUserName(saved);
+    } catch {
+      /* ignore */
+    }
+  }, []);
 
   const [cancelQuestions, setCancelQuestions] = useState<CancelQuestion[]>([]);
   const [cancelChoice, setCancelChoice] = useState<
@@ -284,10 +295,15 @@ export default function Home() {
       .map((r) => ({ merchant: r.merchant, category: r.category }));
     if (items.length > 0 || gateways.length > 0) {
       try {
+        localStorage.setItem("expense_tool_user_name", userName.trim());
+      } catch {
+        /* ignore */
+      }
+      try {
         await fetch("/api/learn", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ items, gateways }),
+          body: JSON.stringify({ items, gateways, by: userName.trim() }),
         });
       } catch {
         /* non-fatal: still let the user download */
@@ -904,6 +920,18 @@ export default function Home() {
               })}
             </div>
 
+            <div style={nameRow}>
+              <label style={nameLabel}>
+                작성자 이름
+                <input
+                  style={nameInput}
+                  placeholder="예: 한주드 (분류 기록에 남습니다)"
+                  value={userName}
+                  onChange={(e) => setUserName(e.target.value)}
+                />
+              </label>
+            </div>
+
             <div style={modalActions}>
               <button
                 type="button"
@@ -985,6 +1013,22 @@ function button(disabled: boolean): CSSProperties {
     marginBottom: 12,
   };
 }
+const nameRow: CSSProperties = { marginBottom: 12 };
+const nameLabel: CSSProperties = {
+  display: "flex",
+  flexDirection: "column",
+  gap: 4,
+  fontSize: 12,
+  fontWeight: 600,
+  color: "#5f6873",
+};
+const nameInput: CSSProperties = {
+  padding: "8px 10px",
+  borderRadius: 8,
+  border: "1px solid #d7dbe0",
+  fontSize: 13,
+  fontWeight: 400,
+};
 const errBox: CSSProperties = {
   marginTop: 4,
   marginBottom: 12,
