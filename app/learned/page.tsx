@@ -83,6 +83,7 @@ export default function LearnedPage() {
   const [error, setError] = useState<string | null>(null);
   const [persistent, setPersistent] = useState(false);
   const [q, setQ] = useState("");
+  const [historyBy, setHistoryBy] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
@@ -139,6 +140,22 @@ export default function LearnedPage() {
     for (const h of history) if (!m.has(h.key)) m.set(h.key, h);
     return m;
   }, [history]);
+
+  // 분류 기록에 등장한 작성자 목록(중복 제거, 가나다순).
+  const historyAuthors = useMemo(() => {
+    const set = new Set<string>();
+    for (const h of history)
+      set.add(h.by && h.by.trim() ? h.by.trim() : "익명");
+    return Array.from(set).sort((a, b) => a.localeCompare(b, "ko"));
+  }, [history]);
+
+  // 드롭다운에서 선택한 작성자의 기록만 표시.
+  const visibleHistory = useMemo(() => {
+    if (!historyBy) return history;
+    return history.filter(
+      (h) => (h.by && h.by.trim() ? h.by.trim() : "익명") === historyBy,
+    );
+  }, [history, historyBy]);
 
   const expenseCount = entries.filter((e) => e.group === "expense").length;
   const travelCount = entries.filter((e) => e.group === "travel").length;
@@ -556,6 +573,28 @@ export default function LearnedPage() {
             저장소 기준, 최신순). 검토 팝업이나 여기서 분류할 때 입력한 작성자
             이름이 함께 기록됩니다.
           </p>
+          {historyAuthors.length > 0 && (
+            <div style={histFilterRow}>
+              <label style={histFilterLabel}>분류자별 보기</label>
+              <select
+                style={histFilterSelect}
+                value={historyBy}
+                onChange={(e) => setHistoryBy(e.target.value)}
+              >
+                <option value="">전체 ({history.length}건)</option>
+                {historyAuthors.map((name) => (
+                  <option key={name} value={name}>
+                    {name}
+                  </option>
+                ))}
+              </select>
+              {historyBy ? (
+                <span style={histFilterCount}>
+                  {historyBy} · {visibleHistory.length}건
+                </span>
+              ) : null}
+            </div>
+          )}
           {history.length === 0 ? (
             <p style={muted}>아직 기록이 없습니다.</p>
           ) : (
@@ -569,7 +608,7 @@ export default function LearnedPage() {
                 </tr>
               </thead>
               <tbody>
-                {history.map((h, i) => (
+                {visibleHistory.map((h, i) => (
                   <tr key={h.at + "_" + i}>
                     <td style={td}>{fmtAt(h.at)}</td>
                     <td style={td}>{h.by || "익명"}</td>
@@ -597,6 +636,22 @@ export default function LearnedPage() {
 }
 
 const histWrap: CSSProperties = { marginTop: 28 };
+const histFilterRow: CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 8,
+  margin: "4px 0 12px",
+  flexWrap: "wrap",
+};
+const histFilterLabel: CSSProperties = { fontSize: 13, color: "#555" };
+const histFilterSelect: CSSProperties = {
+  padding: "6px 10px",
+  borderRadius: 8,
+  border: "1px solid #ccc",
+  fontSize: 13,
+  background: "#fff",
+};
+const histFilterCount: CSSProperties = { fontSize: 13, color: "#2563eb" };
 const tdByCell: CSSProperties = {
   padding: "8px 10px",
   borderBottom: "1px solid #eef0f3",
