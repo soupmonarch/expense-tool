@@ -8,8 +8,12 @@
 //  - 매칭 안 되는 영수증 : PDF에서 제외, 리포트로만 알림
 
 import { PDFDocument } from "pdf-lib";
-import { normalizeMerchant } from "./store";
-import { approvalKey, type ReceiptInfo } from "./parseReceipts";
+import { normalizeMerchant } from "./normalize";
+import {
+  approvalKey,
+  type ReceiptBox,
+  type ReceiptInfo,
+} from "./parseReceipts";
 
 export interface RowMeta {
   approval?: string; // 결제 승인번호
@@ -20,6 +24,8 @@ export interface RowMeta {
 interface Half {
   page: number;
   side: "L" | "R";
+  // 그리드형 양식(한 컩럼에 여러 장): 이 영수증의 실제 crop 영역
+  box?: ReceiptBox;
 }
 
 export interface MatchPlan {
@@ -92,7 +98,11 @@ export function matchReceipts(
       const pIdx = takePurchase(meta);
       if (pIdx >= 0) {
         used.add(pIdx);
-        halves.push({ page: receipts[pIdx].page, side: receipts[pIdx].side });
+        halves.push({
+          page: receipts[pIdx].page,
+          side: receipts[pIdx].side,
+          box: receipts[pIdx].box,
+        });
         matched++;
       } else {
         missing++;
@@ -100,7 +110,11 @@ export function matchReceipts(
       const cIdx = takeCancel(meta);
       if (cIdx >= 0) {
         used.add(cIdx);
-        halves.push({ page: receipts[cIdx].page, side: receipts[cIdx].side });
+        halves.push({
+          page: receipts[cIdx].page,
+          side: receipts[cIdx].side,
+          box: receipts[cIdx].box,
+        });
       }
       if (halves.length > 0) pages.push(halves);
     }
@@ -135,9 +149,10 @@ export async function renderReceiptPdf(
       const size = srcPage.getSize();
       const mid = size.width / 2;
       const box =
-        half.side === "L"
+        half.box ??
+        (half.side === "L"
           ? { left: 0, bottom: 0, right: mid, top: size.height }
-          : { left: mid, bottom: 0, right: size.width, top: size.height };
+          : { left: mid, bottom: 0, right: size.width, top: size.height });
       const emb = await out.embedPage(srcPage, box);
       embeds.push(emb);
     }

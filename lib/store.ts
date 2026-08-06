@@ -1,4 +1,7 @@
 import { kv } from "@vercel/kv";
+import { normalizeMerchant } from "./normalize";
+
+export { normalizeMerchant };
 
 // Shared, cross-user learning store: maps a normalized merchant name to a
 // category that a user explicitly confirmed. Once saved, EVERY user's future
@@ -20,17 +23,6 @@ const gatewayMemory = new Set<string>();
 
 export function kvEnabled(): boolean {
   return !!(process.env.KV_REST_API_URL && process.env.KV_REST_API_TOKEN);
-}
-
-// Normalize so small formatting differences map to the same merchant.
-// e.g. "카카오T일반택시_0" and "카카오T일반택시" collapse together.
-export function normalizeMerchant(s: string): string {
-  return String(s || "")
-    .toLowerCase()
-    .trim()
-    .replace(/\s+/g, " ")
-    .replace(/[_\-]?\d+$/, "")
-    .trim();
 }
 
 export async function getLearnedMap(): Promise<Record<string, string>> {

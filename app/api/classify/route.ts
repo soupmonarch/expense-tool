@@ -2,7 +2,11 @@ import { NextRequest, NextResponse } from "next/server";
 import { parseStatement, type ColumnMapping } from "@/lib/parseStatement";
 import { classifyAll } from "@/lib/classify";
 import { reconcileCancellations } from "@/lib/reconcile";
-import { parseReceiptPdf, receiptsToTransactions } from "@/lib/parseReceipts";
+import {
+  parseReceiptPdf,
+  receiptsToTransactions,
+  type ReceiptInfo,
+} from "@/lib/parseReceipts";
 import { dedupeTransactions } from "@/lib/dedupe";
 import { kvEnabled } from "@/lib/store";
 import type { Transaction } from "@/lib/types";
@@ -51,18 +55,35 @@ export async function POST(req: NextRequest) {
     const receiptInfo = { pageCount: 0, receipts: 0, errors: [] as string[] };
 
     if (mode === "pdf") {
-      if (pdfFiles.length === 0)
+      // 브라우저가 /api/parse-receipts 로 조각 파싱한 결과(JSON)를 우선 받는다.
+      // (Vercel 요청 본문 4.5MB 한도 때문에 큰 PDF는 통째로 못 올린다)
+      const receiptDataRaw = form.get("receiptData");
+      if (typeof receiptDataRaw === "string" && receiptDataRaw.length > 0) {
+        const pre = JSON.parse(receiptDataRaw) as {
+          receipts?: ReceiptInfo[];
+          pageCount?: number;
+          errors?: string[];
+        };
+        const list = Array.isArray(pre.receipts) ? pre.receipts : [];
+        receiptInfo.pageCount += pre.pageCount || 0;
+        receiptInfo.receipts += list.length;
+        if (Array.isArray(pre.errors)) receiptInfo.errors.push(...pre.errors);
+        transactions.push(...receiptsToTransactions(list));
+      } else if (pdfFiles.length === 0) {
         return NextResponse.json(
           { error: "영수증 PDF 파일을 첨부해 주세요." },
           { status: 400 },
         );
-      for (const f of pdfFiles) {
-        const bytes = new Uint8Array(await f.arrayBuffer());
-        const parsed = await parseReceiptPdf(bytes);
-        if (parsed.error) receiptInfo.errors.push(`${f.name}: ${parsed.error}`);
-        receiptInfo.pageCount += parsed.pageCount;
-        receiptInfo.receipts += parsed.receipts.length;
-        transactions.push(...receiptsToTransactions(parsed.receipts));
+      } else {
+        for (const f of pdfFiles) {
+          const bytes = new Uint8Array(await f.arrayBuffer());
+          const parsed = await parseReceiptPdf(bytes);
+          if (parsed.error)
+            receiptInfo.errors.push(`${f.name}: ${parsed.error}`);
+          receiptInfo.pageCount += parsed.pageCount;
+          receiptInfo.receipts += parsed.receipts.length;
+          transactions.push(...receiptsToTransactions(parsed.receipts));
+        }
       }
     } else {
       if (excelFiles.length === 0)

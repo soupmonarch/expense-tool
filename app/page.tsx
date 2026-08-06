@@ -13,6 +13,13 @@ import {
   TRAVEL_CATEGORIES,
   UNCLASSIFIED,
 } from "@/lib/categories";
+import {
+  attachReceiptsToZip,
+  mergePdfFiles,
+  parseReceiptsRemote,
+  readJsonSafe,
+} from "@/lib/receiptsClient";
+import type { ParsedReceipts } from "@/lib/parseReceipts";
 
 interface Row {
   id: number;
@@ -154,6 +161,27 @@ export default function Home() {
     setGatewayChoice({});
   }
 
+  // 영수증 PDF 병합/파싱 결과 캐시 (분류하기 → 다운로드에서 재사용).
+  // 원본 PDF는 서버로 올리지 않는다(Vercel 4.5MB 요청 한도).
+  const receiptCache = useRef<{
+    key: string;
+    bytes: Uint8Array;
+    parsed: ParsedReceipts;
+  } | null>(null);
+
+  async function ensureReceiptsParsed() {
+    const key = receiptFiles
+      .map((f) => `${f.name}:${f.size}:${f.lastModified}`)
+      .join("|");
+    if (receiptCache.current && receiptCache.current.key === key)
+      return receiptCache.current;
+    const bytes = await mergePdfFiles(receiptFiles);
+    const parsed = await parseReceiptsRemote(bytes);
+    const entry = { key, bytes, parsed };
+    receiptCache.current = entry;
+    return entry;
+  }
+
   function addExcelFiles(list: FileList | null) {
     if (!list || list.length === 0) return;
     setFiles((prev) => [...prev, ...Array.from(list)]);
@@ -191,10 +219,22 @@ export default function Home() {
       const fd = new FormData();
       fd.append("mode", mode);
       if (mode !== "pdf") for (const f of files) fd.append("file", f);
-      if (mode !== "excel")
-        for (const f of receiptFiles) fd.append("receipts", f);
+      // 영수증 PDF는 서버로 통째로 올리지 않는다(4.5MB 한도 →
+      // "Request Entity Too Large" 오류 방지). PDF만 모드에서는
+      // 브라우저에서 조각 파싱한 결과(JSON)만 전달한다.
+      if (mode === "pdf") {
+        const rc = await ensureReceiptsParsed();
+        fd.append(
+          "receiptData",
+          JSON.stringify({
+            receipts: rc.parsed.receipts,
+            pageCount: rc.parsed.pageCount,
+            errors: rc.parsed.error ? [rc.parsed.error] : [],
+          }),
+        );
+      }
       const res = await fetch("/api/classify", { method: "POST", body: fd });
-      const data = await res.json();
+      const data = await readJsonSafe(res);
       if (!res.ok) throw new Error(data.error || `Failed (${res.status})`);
 
       const newRows = data.rows as Row[];
@@ -377,16 +417,28 @@ export default function Home() {
     setDone(false);
     try {
       const payload = finalizeRows();
-      const fd = new FormData();
-      fd.append("rows", JSON.stringify(payload));
-      if (mode !== "excel")
-        for (const f of receiptFiles) fd.append("receipts", f);
-      const res = await fetch("/api/generate", { method: "POST", body: fd });
+      // 영수증 PDF는 서버로 올리지 않고(4.5MB 한도) 브라우저에서 직접
+      // 잘라 정렬한 뒤, 서버가 만든 엑셀 ZIP 에 합친다.
+      const res = await fetch("/api/generate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ rows: payload }),
+      });
       if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        throw new Error(data.error || `Failed (${res.status})`);
+        let msg = `Failed (${res.status})`;
+        try {
+          const data = await readJsonSafe(res);
+          msg = data?.error || msg;
+        } catch (e: any) {
+          msg = e?.message || msg;
+        }
+        throw new Error(msg);
       }
-      const blob = await res.blob();
+      let blob = await res.blob();
+      if (mode !== "excel" && receiptFiles.length > 0) {
+        const rc = await ensureReceiptsParsed();
+        blob = await attachReceiptsToZip(blob, payload, rc.bytes, rc.parsed);
+      }
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
