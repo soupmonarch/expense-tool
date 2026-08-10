@@ -17,8 +17,13 @@ import {
 } from "./buildReceiptPdf";
 import { ALL_CATEGORIES, groupOf, type Category } from "./categories";
 
-// 조각당 목표 크기. Vercel 한도(4.5MB) 대비 여유를 둔다.
-const CHUNK_TARGET = 3 * 1024 * 1024;
+// 조각당 목표 크기. Vercel 한도(4.5MB) 대비 크게 여유를 둔다.
+const CHUNK_TARGET = 2.5 * 1024 * 1024;
+// 저장 후 실측 크기 상한: 이보다 크면 페이지를 반으로 나눠 재분할한다.
+// (페이지별 용량 편차가 커도 조각이 4.5MB를 넘지 않게 보장)
+const CHUNK_HARD_MAX = 3.5 * 1024 * 1024;
+// 한 페이지짜리 조각의 절대 한도(Vercel 요청 본문 제한)
+const PAGE_ABS_MAX = 4.3 * 1024 * 1024;
 
 // 응답을 안전하게 JSON 으로 읽는다. 플랫폼이 JSON 이 아닌 텍스트(예:
 // "Request Entity Too Large")를 돌려주면 친절한 한국어 오류로 바꿔 던진다.
@@ -52,7 +57,24 @@ export async function mergePdfFiles(files: File[]): Promise<Uint8Array> {
   return await out.save();
 }
 
-// 큰 PDF를 페이지 단위로 여러 조각으로 나눈다(각 조각 ≈ maxBytes 이하).
+// 지정한 페이지 범위만 담은 새 PDF 바이트를 만든다.
+async function savePageRange(
+  src: PDFDocument,
+  start: number,
+  count: number,
+): Promise<Uint8Array> {
+  const idx: number[] = [];
+  for (let i = start; i < start + count; i++) idx.push(i);
+  const out = await PDFDocument.create();
+  const pages = await out.copyPages(src, idx);
+  for (const pg of pages) out.addPage(pg);
+  return await out.save();
+}
+
+// 큰 PDF를 페이지 단위로 여러 조각으로 나눈다.
+// 중요: 평균 페이지 크기로 조각 크기를 재단하면, 용량이 큰 페이지가 몰린
+// 조각이 4.5MB를 넘을 수 있다(실제 발생한 버그). 그래서 저장 후 실측
+// 크기를 검사하고, 상한을 넘으면 페이지를 반씩 나눠 재귀적으로 재분할한다.
 async function splitPdfBytes(
   bytes: Uint8Array,
   maxBytes = CHUNK_TARGET,
@@ -60,18 +82,33 @@ async function splitPdfBytes(
   if (bytes.length <= maxBytes) return [{ bytes, pageStart: 0 }];
   const src = await PDFDocument.load(bytes);
   const total = src.getPageCount();
+  const chunks: { bytes: Uint8Array; pageStart: number }[] = [];
+
+  async function emit(start: number, count: number): Promise<void> {
+    const saved = await savePageRange(src, start, count);
+    if (saved.length > CHUNK_HARD_MAX && count > 1) {
+      const half = Math.ceil(count / 2);
+      await emit(start, half);
+      await emit(start + half, count - half);
+      return;
+    }
+    if (count === 1 && saved.length > PAGE_ABS_MAX) {
+      throw new Error(
+        "영수증 PDF의 " +
+          (start + 1) +
+          "페이지 한 장이 " +
+          (saved.length / 1024 / 1024).toFixed(1) +
+          "MB로 서버 한도(4.5MB)를 넘어 처리할 수 없습니다. " +
+          "스캔 해상도를 낮춰 다시 만들어 주세요.",
+      );
+    }
+    chunks.push({ bytes: saved, pageStart: start });
+  }
+
   const perPage = Math.max(1, bytes.length / Math.max(1, total));
   const pagesPerChunk = Math.max(1, Math.floor(maxBytes / perPage));
-  const chunks: { bytes: Uint8Array; pageStart: number }[] = [];
   for (let start = 0; start < total; start += pagesPerChunk) {
-    const idx: number[] = [];
-    for (let i = start; i < Math.min(total, start + pagesPerChunk); i++) {
-      idx.push(i);
-    }
-    const out = await PDFDocument.create();
-    const pages = await out.copyPages(src, idx);
-    for (const pg of pages) out.addPage(pg);
-    chunks.push({ bytes: await out.save(), pageStart: start });
+    await emit(start, Math.min(pagesPerChunk, total - start));
   }
   return chunks;
 }
