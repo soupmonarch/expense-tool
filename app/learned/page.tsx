@@ -24,6 +24,15 @@ interface HistoryItem {
   source?: string;
 }
 
+// 분류 기록 묶음: 같은 사람이 30분 이내에 연속으로 분류한 기록 = 한 세션.
+interface Session {
+  id: string;
+  by: string;
+  newest: string;
+  oldest: string;
+  items: HistoryItem[];
+}
+
 function csvCell(v: string): string {
   const s = String(v ?? "");
   return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
@@ -84,6 +93,11 @@ export default function LearnedPage() {
   const [persistent, setPersistent] = useState(false);
   const [q, setQ] = useState("");
   const [historyBy, setHistoryBy] = useState("");
+  // 학습 데이터 페이지네이션
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(20);
+  // 펼쳐진 분류 기록 묶음 id
+  const [openSession, setOpenSession] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
@@ -134,6 +148,13 @@ export default function LearnedPage() {
     );
   }, [entries, q]);
 
+  const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
+  const pageSafe = Math.min(page, totalPages);
+  const paged = useMemo(
+    () => filtered.slice((pageSafe - 1) * pageSize, pageSafe * pageSize),
+    [filtered, pageSafe, pageSize],
+  );
+
   // 가맹점별 최근 분류자(history는 최신순이므로 첫 등장이 최신).
   const latestBy = useMemo(() => {
     const m = new Map<string, HistoryItem>();
@@ -156,6 +177,37 @@ export default function LearnedPage() {
       (h) => (h.by && h.by.trim() ? h.by.trim() : "익명") === historyBy,
     );
   }, [history, historyBy]);
+
+  // 기록을 세션(같은 사람 · 30분 이내 연속)으로 묶는다. history는 최신순.
+  const sessions = useMemo(() => {
+    const GAP = 30 * 60 * 1000;
+    const out: Session[] = [];
+    let cur: Session | null = null;
+    let prevAt = 0;
+    for (const h of history) {
+      const by = h.by && h.by.trim() ? h.by.trim() : "익명";
+      const t = new Date(h.at).getTime() || 0;
+      if (!cur || cur.by !== by || prevAt - t > GAP) {
+        cur = {
+          id: by + "_" + h.at + "_" + out.length,
+          by,
+          newest: h.at,
+          oldest: h.at,
+          items: [],
+        };
+        out.push(cur);
+      }
+      cur.items.push(h);
+      cur.oldest = h.at;
+      prevAt = t;
+    }
+    return out;
+  }, [history]);
+
+  const visibleSessions = useMemo(
+    () => (historyBy ? sessions.filter((s) => s.by === historyBy) : sessions),
+    [sessions, historyBy],
+  );
 
   const expenseCount = entries.filter((e) => e.group === "expense").length;
   const travelCount = entries.filter((e) => e.group === "travel").length;
@@ -394,7 +446,10 @@ export default function LearnedPage() {
             style={searchBox}
             placeholder="가맹점 또는 분류 검색…"
             value={q}
-            onChange={(e) => setQ(e.target.value)}
+            onChange={(e) => {
+              setQ(e.target.value);
+              setPage(1);
+            }}
           />
           <button style={ghostBtn} onClick={load}>
             새로고침
@@ -430,7 +485,7 @@ export default function LearnedPage() {
               </tr>
             </thead>
             <tbody>
-              {filtered.map((e) => {
+              {paged.map((e) => {
                 const editing = editKey === e.merchant;
                 return (
                   <tr key={e.merchant}>
@@ -527,6 +582,44 @@ export default function LearnedPage() {
           </table>
         )}
 
+        {!loading && !error && filtered.length > 0 && (
+          <div style={pagerRow}>
+            <span style={pagerInfo}>
+              총 {filtered.length}건 · {pageSafe}/{totalPages} 페이지
+            </span>
+            <div style={pagerBtns}>
+              <select
+                style={pagerSelect}
+                value={pageSize}
+                onChange={(e) => {
+                  setPageSize(Number(e.target.value));
+                  setPage(1);
+                }}
+              >
+                {[10, 20, 30].map((n) => (
+                  <option key={n} value={n}>
+                    {n}개씩
+                  </option>
+                ))}
+              </select>
+              <button
+                style={pagerBtn}
+                disabled={pageSafe <= 1}
+                onClick={() => setPage(pageSafe - 1)}
+              >
+                ← 이전
+              </button>
+              <button
+                style={pagerBtn}
+                disabled={pageSafe >= totalPages}
+                onClick={() => setPage(pageSafe + 1)}
+              >
+                다음 →
+              </button>
+            </div>
+          </div>
+        )}
+
         <div style={gwWrap}>
           <h2 style={gwTitle}>
             💳 결제대행사 (학습 금지) · {gateways.length}건
@@ -569,9 +662,8 @@ export default function LearnedPage() {
         <div style={histWrap}>
           <h2 style={gwTitle}>📜 분류 기록 · 최근 {history.length}건</h2>
           <p style={subtitle}>
-            누가 어떤 가맹점을 어떤 분류로 확정했는지 시간순으로 보여줍니다(공용
-            저장소 기준, 최신순). 검토 팝업이나 여기서 분류할 때 입력한 작성자
-            이름이 함께 기록됩니다.
+            같은 사람이 30분 이내에 연속으로 분류한 기록을 한 묶음으로 보여줍니다
+            (최신순). 묶음을 클릭하면 상세 분류 내역이 펼쳌집니다.
           </p>
           {historyAuthors.length > 0 && (
             <div style={histFilterRow}>
@@ -598,28 +690,53 @@ export default function LearnedPage() {
           {history.length === 0 ? (
             <p style={muted}>아직 기록이 없습니다.</p>
           ) : (
-            <table style={table}>
-              <thead>
-                <tr>
-                  <th style={th}>일시</th>
-                  <th style={th}>분류자</th>
-                  <th style={th}>가맹점</th>
-                  <th style={th}>분류</th>
-                </tr>
-              </thead>
-              <tbody>
-                {visibleHistory.map((h, i) => (
-                  <tr key={h.at + "_" + i}>
-                    <td style={td}>{fmtAt(h.at)}</td>
-                    <td style={td}>{h.by || "익명"}</td>
-                    <td style={td}>{h.merchant}</td>
-                    <td style={tdCat}>
-                      {h.category === "__GATEWAY__" ? "결제대행사" : h.category}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+            <div>
+              {visibleSessions.map((s) => {
+                const open = openSession === s.id;
+                return (
+                  <div key={s.id} style={sessCard}>
+                    <button
+                      style={sessHead}
+                      onClick={() => setOpenSession(open ? null : s.id)}
+                    >
+                      <span style={sessArrow}>{open ? "▼" : "▶"}</span>
+                      <b style={sessBy}>{s.by}</b>
+                      <span style={sessMeta}>
+                        {fmtAt(s.oldest)}
+                        {s.oldest !== s.newest ? " ~ " + fmtAt(s.newest) : ""}
+                      </span>
+                      <span style={sessCount}>{s.items.length}건</span>
+                    </button>
+                    {open && (
+                      <div style={sessBody}>
+                        <table style={table}>
+                          <thead>
+                            <tr>
+                              <th style={th}>일시</th>
+                              <th style={th}>가맹점</th>
+                              <th style={th}>분류</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {s.items.map((h, i) => (
+                              <tr key={h.at + "_" + i}>
+                                <td style={td}>{fmtAt(h.at)}</td>
+                                <td style={td}>{h.merchant}</td>
+                                <td style={tdCat}>
+                                  {h.category === "__GATEWAY__"
+                                    ? "결제대행사"
+                                    : h.category}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
           )}
         </div>
 
@@ -652,6 +769,65 @@ const histFilterSelect: CSSProperties = {
   background: "#fff",
 };
 const histFilterCount: CSSProperties = { fontSize: 13, color: "#2563eb" };
+const pagerRow: CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "space-between",
+  marginTop: 12,
+  flexWrap: "wrap",
+  gap: 8,
+};
+const pagerInfo: CSSProperties = { fontSize: 13, color: "#6b7280" };
+const pagerBtns: CSSProperties = {
+  display: "flex",
+  gap: 6,
+  alignItems: "center",
+};
+const pagerSelect: CSSProperties = {
+  padding: "6px 10px",
+  borderRadius: 8,
+  border: "1px solid #ccc",
+  fontSize: 13,
+  background: "#fff",
+};
+const pagerBtn: CSSProperties = {
+  padding: "6px 14px",
+  border: "1px solid #d9dde3",
+  background: "#fff",
+  borderRadius: 8,
+  fontSize: 13,
+  cursor: "pointer",
+};
+const sessCard: CSSProperties = {
+  border: "1px solid #e6ebf2",
+  borderRadius: 10,
+  marginBottom: 8,
+  overflow: "hidden",
+};
+const sessHead: CSSProperties = {
+  width: "100%",
+  display: "flex",
+  alignItems: "center",
+  gap: 10,
+  padding: "10px 14px",
+  background: "#f7f9fc",
+  border: "none",
+  cursor: "pointer",
+  fontSize: 13,
+  textAlign: "left",
+};
+const sessArrow: CSSProperties = { fontSize: 11, color: "#6b7280" };
+const sessBy: CSSProperties = { fontSize: 13 };
+const sessMeta: CSSProperties = { color: "#6b7280", fontSize: 12, flex: 1 };
+const sessCount: CSSProperties = {
+  background: "#e7f0ff",
+  color: "#2d6cdf",
+  borderRadius: 999,
+  padding: "2px 10px",
+  fontSize: 12,
+  fontWeight: 600,
+};
+const sessBody: CSSProperties = { padding: "4px 10px 10px" };
 const tdByCell: CSSProperties = {
   padding: "8px 10px",
   borderBottom: "1px solid #eef0f3",
