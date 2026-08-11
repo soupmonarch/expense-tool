@@ -37,9 +37,7 @@ export async function readJsonSafe(res: Response): Promise<any> {
         "업로드 용량이 서버 한도(4.5MB)를 초과했습니다. 페이지를 새로고침한 뒤 다시 시도해 주세요.",
       );
     }
-    throw new Error(
-      `서버 응답 오류 (${res.status}): ${text.slice(0, 120)}`,
-    );
+    throw new Error(`서버 응답 오류 (${res.status}): ${text.slice(0, 120)}`);
   }
 }
 
@@ -115,8 +113,12 @@ async function splitPdfBytes(
 
 // 조각을 차례로 /api/parse-receipts 에 보내 파싱하고, 페이지 번호를 원본
 // 기준으로 보정해 합친다.
+// 진행 상황을 화면에 알리기 위한 콜백 (예: "조각 2/4 분석 중")
+export type ReceiptProgress = (msg: string) => void;
+
 export async function parseReceiptsRemote(
   bytes: Uint8Array,
+  onProgress?: ReceiptProgress,
 ): Promise<ParsedReceipts> {
   const chunks = await splitPdfBytes(bytes);
   const receipts: ReceiptInfo[] = [];
@@ -124,7 +126,13 @@ export async function parseReceiptsRemote(
   const errors: string[] = [];
   let sample: string | undefined;
 
-  for (const c of chunks) {
+  for (let ci = 0; ci < chunks.length; ci++) {
+    const c = chunks[ci];
+    onProgress?.(
+      chunks.length > 1
+        ? `영수증 조각 ${ci + 1}/${chunks.length} 업로드·분석 중 · 지금까지 ${receipts.length}장 인식`
+        : "영수증 업로드·분석 중…",
+    );
     const fd = new FormData();
     fd.append(
       "file",

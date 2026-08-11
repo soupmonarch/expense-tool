@@ -1,5 +1,7 @@
 "use client";
 
+import { version as APP_VERSION } from "../package.json";
+
 import {
   useEffect,
   useMemo,
@@ -104,6 +106,23 @@ export default function Home() {
   const [downloading, setDownloading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState(false);
+  // 진행 상황 메시지 (분류·다운로드 중 단계 표시)
+  const [progress, setProgress] = useState<string | null>(null);
+
+  // 이전 작업 이어하기용 저장 형식
+  type SavedWork = {
+    savedAt: number;
+    mode: "excel" | "pdf" | "both";
+    rows: Row[];
+    stats: Stats | null;
+    cancelQuestions: CancelQuestion[];
+    cancelChoice: Record<number, CancelChoice>;
+    learnChoice: Record<number, boolean>;
+    gatewayChoice: Record<number, boolean>;
+    aiDiag: AiDiagnostic | null;
+    persistent: boolean;
+  };
+  const [resume, setResume] = useState<SavedWork | null>(null);
   const [aiDiag, setAiDiag] = useState<AiDiagnostic | null>(null);
 
   const [rows, setRows] = useState<Row[] | null>(null);
@@ -169,14 +188,96 @@ export default function Home() {
     parsed: ParsedReceipts;
   } | null>(null);
 
+  // ── 이전 작업 이어하기 (브라우저 로컬 저장) ──────────────────────────
+  const WORK_KEY = "expense_tool_last_work";
+
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(WORK_KEY);
+      if (!raw) return;
+      const saved = JSON.parse(raw) as SavedWork;
+      if (saved && Array.isArray(saved.rows) && saved.rows.length > 0)
+        setResume(saved);
+    } catch {
+      /* 손상된 저장본은 무시 */
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    if (!rows || rows.length === 0) return;
+    try {
+      const saved: SavedWork = {
+        savedAt: Date.now(),
+        mode,
+        rows,
+        stats,
+        cancelQuestions,
+        cancelChoice,
+        learnChoice,
+        gatewayChoice,
+        aiDiag,
+        persistent,
+      };
+      localStorage.setItem(WORK_KEY, JSON.stringify(saved));
+    } catch {
+      /* 저장 실패(용량 초과 등)는 무시 */
+    }
+  }, [
+    rows,
+    stats,
+    mode,
+    cancelQuestions,
+    cancelChoice,
+    learnChoice,
+    gatewayChoice,
+    aiDiag,
+    persistent,
+  ]);
+
+  function restoreWork() {
+    if (!resume) return;
+    setMode(resume.mode);
+    setRows(resume.rows);
+    setStats(resume.stats);
+    setCancelQuestions(resume.cancelQuestions || []);
+    setCancelChoice(resume.cancelChoice || {});
+    setLearnChoice(resume.learnChoice || {});
+    setGatewayChoice(resume.gatewayChoice || {});
+    setAiDiag(resume.aiDiag ?? null);
+    setPersistent(!!resume.persistent);
+    setError(null);
+    setDone(false);
+    setResume(null);
+  }
+
+  function discardWork() {
+    try {
+      localStorage.removeItem(WORK_KEY);
+    } catch {
+      /* 무시 */
+    }
+    setResume(null);
+  }
+
+  // AI 오류 메시지를 사용자 친화적인 한국어로 바꾼다 (크레딧 소진 등)
+  function friendlyAiMessage(msg?: string): string {
+    if (msg && /429|quota|credit|billing/i.test(msg))
+      return "AI 분류 크레딧이 소진되어 이번에는 규칙·학습 데이터로만 분류했습니다. 관리자에게 크레딧 충전을 요청해 주세요.";
+    return `AI 오류 — ${msg || "알 수 없는 오류"}`;
+  }
+
   async function ensureReceiptsParsed() {
     const key = receiptFiles
       .map((f) => `${f.name}:${f.size}:${f.lastModified}`)
       .join("|");
     if (receiptCache.current && receiptCache.current.key === key)
       return receiptCache.current;
+    setProgress(
+      receiptFiles.length > 1 ? "영수증 PDF 병합 중…" : "영수증 PDF 준비 중…",
+    );
     const bytes = await mergePdfFiles(receiptFiles);
-    const parsed = await parseReceiptsRemote(bytes);
+    const parsed = await parseReceiptsRemote(bytes, setProgress);
     const entry = { key, bytes, parsed };
     receiptCache.current = entry;
     return entry;
@@ -233,6 +334,11 @@ export default function Home() {
           }),
         );
       }
+      setProgress(
+        mode === "pdf"
+          ? "분류 결과 정리 중…"
+          : "카드 내역 업로드 및 AI 분류 중… (내역이 많으면 1분 이상 걸릴 수 있어요)",
+      );
       const res = await fetch("/api/classify", { method: "POST", body: fd });
       const data = await readJsonSafe(res);
       if (!res.ok) throw new Error(data.error || `Failed (${res.status})`);
@@ -268,6 +374,7 @@ export default function Home() {
       setError(err?.message || "Something went wrong");
     } finally {
       setLoading(false);
+      setProgress(null);
     }
   }
 
@@ -417,6 +524,7 @@ export default function Home() {
     setDone(false);
     try {
       const payload = finalizeRows();
+      setProgress("엑셀 양식 생성 중…");
       // 영수증 PDF는 서버로 올리지 않고(4.5MB 한도) 브라우저에서 직접
       // 잘라 정렬한 뒤, 서버가 만든 엑셀 ZIP 에 합친다.
       const res = await fetch("/api/generate", {
@@ -437,6 +545,7 @@ export default function Home() {
       let blob = await res.blob();
       if (mode !== "excel" && receiptFiles.length > 0) {
         const rc = await ensureReceiptsParsed();
+        setProgress("영수증 PDF 자르기·정렬 중…");
         blob = await attachReceiptsToZip(blob, payload, rc.bytes, rc.parsed);
       }
       const url = URL.createObjectURL(blob);
@@ -450,6 +559,7 @@ export default function Home() {
       setError(err?.message || "Download failed");
     } finally {
       setDownloading(false);
+      setProgress(null);
     }
   }
 
@@ -466,9 +576,58 @@ export default function Home() {
           카드사가 달라도 자동 인식합니다.
         </p>
 
-        <a href="/learned" style={navLink}>
-          📚 지금까지 학습된 분류 데이터 보기 · 관리 →
-        </a>
+        <div style={navRow}>
+          <a href="/learned" style={navBtn}>
+            📚 학습 데이터 관리
+          </a>
+          <a
+            href="/manual.pdf"
+            download="Expense Tool 사용 설명서.pdf"
+            style={navBtn}
+          >
+            📖 사용 설명서
+          </a>
+          <a
+            href="/manual.pdf"
+            target="_blank"
+            rel="noopener noreferrer"
+            style={navBtnGhost}
+          >
+            ↗ 새 탭에서 보기
+          </a>
+        </div>
+
+        {resume && !rows && !loading && (
+          <div style={resumeBox}>
+            <div>
+              🕘 이전 작업이 있습니다 —{" "}
+              {new Date(resume.savedAt).toLocaleString("ko-KR", {
+                month: "numeric",
+                day: "numeric",
+                hour: "2-digit",
+                minute: "2-digit",
+              })}{" "}
+              · {fmt(resume.rows.length)}건 분류됨
+              <br />
+              <span style={mutedText}>
+                영수증 PDF는 브라우저에 저장되지 않으므로, 영수증을 포함해
+                다운로드하려면 같은 PDF를 다시 첨부해 주세요.
+              </span>
+            </div>
+            <div style={resumeBtnRow}>
+              <button type="button" style={resumeBtn} onClick={restoreWork}>
+                이어하기
+              </button>
+              <button
+                type="button"
+                style={resumeGhostBtn}
+                onClick={discardWork}
+              >
+                지우기
+              </button>
+            </div>
+          </div>
+        )}
 
         <div style={modeRow}>
           {(
@@ -597,6 +756,10 @@ export default function Home() {
           {loading ? "분류 중…" : "분류하기"}
         </button>
 
+        {(loading || downloading) && progress && (
+          <div style={progressBox}>⏳ {progress}</div>
+        )}
+
         {error && <div style={errBox}>{error}</div>}
 
         {stats && (
@@ -640,7 +803,7 @@ export default function Home() {
               </div>
             )}
             {aiDiag && aiDiag.status === "error" && (
-              <div style={warnText}>⚠️ AI 오류 — {aiDiag.message}</div>
+              <div style={warnText}>⚠️ {friendlyAiMessage(aiDiag.message)}</div>
             )}
             {aiDiag && aiDiag.status === "empty_result" && (
               <div style={warnText}>
@@ -999,6 +1162,7 @@ export default function Home() {
           </div>
         </div>
       )}
+      <p style={versionText}>Expense Tool v{APP_VERSION}</p>
     </main>
   );
 }
@@ -1025,11 +1189,22 @@ const subtitle: CSSProperties = {
   lineHeight: 1.6,
   marginBottom: 24,
 };
-const navLink: CSSProperties = {
-  display: "inline-block",
+const navRow: CSSProperties = {
+  display: "flex",
+  gap: 8,
+  flexWrap: "wrap",
   marginBottom: 20,
-  fontSize: 14,
+};
+const navBtn: CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 6,
+  padding: "8px 14px",
+  fontSize: 13.5,
   color: "#2d6cdf",
+  background: "#f0f5ff",
+  border: "1px solid #c9daf8",
+  borderRadius: 8,
   textDecoration: "none",
   fontWeight: 600,
 };
@@ -1089,6 +1264,64 @@ const errBox: CSSProperties = {
   background: "#fdecea",
   color: "#c0392b",
   fontSize: 13,
+};
+const progressBox: CSSProperties = {
+  marginTop: 4,
+  marginBottom: 12,
+  padding: "10px 12px",
+  borderRadius: 8,
+  background: "#eef4ff",
+  color: "#2d5bd7",
+  fontSize: 13,
+};
+const resumeBox: CSSProperties = {
+  display: "flex",
+  justifyContent: "space-between",
+  alignItems: "center",
+  gap: 12,
+  flexWrap: "wrap",
+  marginBottom: 16,
+  padding: "12px 14px",
+  borderRadius: 8,
+  background: "#fff8e6",
+  border: "1px solid #f0dfae",
+  fontSize: 13.5,
+};
+const resumeBtnRow: CSSProperties = { display: "flex", gap: 8 };
+const resumeBtn: CSSProperties = {
+  padding: "8px 14px",
+  borderRadius: 8,
+  border: "none",
+  background: "#2d6cdf",
+  color: "#fff",
+  fontWeight: 600,
+  fontSize: 13.5,
+  cursor: "pointer",
+};
+const resumeGhostBtn: CSSProperties = {
+  padding: "8px 14px",
+  borderRadius: 8,
+  border: "1px solid #d5dbe3",
+  background: "#fff",
+  color: "#5f6873",
+  fontWeight: 600,
+  fontSize: 13.5,
+  cursor: "pointer",
+};
+const navBtnGhost: CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  padding: "8px 10px",
+  fontSize: 13,
+  color: "#5f6873",
+  textDecoration: "none",
+  fontWeight: 600,
+};
+const versionText: CSSProperties = {
+  marginTop: 16,
+  textAlign: "center",
+  fontSize: 12,
+  color: "#9aa3ad",
 };
 const statBox: CSSProperties = {
   marginBottom: 12,
