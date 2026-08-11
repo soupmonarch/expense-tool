@@ -102,7 +102,7 @@ function resolveTravel(subtype: TravelSubtype, foreign: boolean): Category {
     case "toll":
       return "KR-Domestic Business Travel - Parking and Toll Charges";
     case "carfuel":
-      return "KR-Domestic Business Travel - Car Rental/Fuel Costs";
+      return "KR-Domestic Business Travel - Car Rental";
     case "allowance":
       return "KR-Travel Costs - Travel Allowance";
   }

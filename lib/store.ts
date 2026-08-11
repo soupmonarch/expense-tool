@@ -1,5 +1,6 @@
 import { kv } from "@vercel/kv";
 import { normalizeMerchant } from "./normalize";
+import { canonCategory } from "./categories";
 
 export { normalizeMerchant };
 
@@ -26,15 +27,20 @@ export function kvEnabled(): boolean {
 }
 
 export async function getLearnedMap(): Promise<Record<string, string>> {
+  let raw: Record<string, string> | null = null;
   if (kvEnabled()) {
     try {
-      const map = await kv.hgetall<Record<string, string>>(HASH);
-      return map || {};
+      raw = (await kv.hgetall<Record<string, string>>(HASH)) || {};
     } catch (e) {
       console.error("KV read failed, using memory:", e);
     }
   }
-  return Object.fromEntries(memory);
+  if (raw === null) raw = Object.fromEntries(memory);
+  // 양식 개정으로 이름이 바뀐 카테고리는 읽을 때 새 이름으로 변환한다
+  // (옛 이름으로 저장된 학습 데이터도 그대로 계속 동작).
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(raw)) out[k] = canonCategory(v);
+  return out;
 }
 
 export async function saveLearned(

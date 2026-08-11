@@ -48,7 +48,7 @@ export const TRAVEL_CATEGORIES = [
   "KR-Domestic Business Travel - Accommodation",
   "KR-Domestic Business Travel - Parking and Toll Charges",
   "KR-Domestic Business Travel - Other Transportation",
-  "KR-Domestic Business Travel - Car Rental/Fuel Costs",
+  "KR-Domestic Business Travel - Car Rental",
 ] as const;
 
 export type ExpenseCategory = (typeof EXPENSE_CATEGORIES)[number];
@@ -66,6 +66,17 @@ export function groupOf(category: Category): Group {
   return (EXPENSE_CATEGORIES as readonly string[]).includes(category)
     ? "expense"
     : "travel";
+}
+
+// 회사 양식 개정으로 이름이 바뀐 카테고리(옛 이름 → 새 이름).
+// 공유 저장소(KV)에 옛 이름으로 학습된 데이터도 읽을 때 자동으로 새 이름으로 변환된다.
+export const LEGACY_CATEGORY_RENAMES: Record<string, string> = {
+  "KR-Domestic Business Travel - Car Rental/Fuel Costs":
+    "KR-Domestic Business Travel - Car Rental",
+};
+
+export function canonCategory(category: string): string {
+  return LEGACY_CATEGORY_RENAMES[category] ?? category;
 }
 
 // Sentinel used when neither rules nor AI could classify a row.

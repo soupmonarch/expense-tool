@@ -31,7 +31,7 @@
 ## 분류 카테고리
 
 - Expense(4): Courier and Postage Fees / Office Supplies / TELEPHONE EXPENSES / Business Entertainment Expenses
-- Travel(9): Travel Allowance / (해외)Airfare·Accommodation·Other Transportation / (국내)Airfare·Accommodation·Parking and Toll·Other Transportation·Car Rental/Fuel
+- Travel(9): Travel Allowance / (해외)Airfare·Accommodation·Other Transportation / (국내)Airfare·Accommodation·Parking and Toll·Other Transportation·Car Rental
 - 미분류 항목은 Expense 파일에 `UNCLASSIFIED`로 표시.
 
 ## 배포 (Vercel)
