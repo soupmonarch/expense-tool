@@ -569,33 +569,7 @@ export default function Home() {
   return (
     <main style={wrap}>
       <div style={card}>
-        <h1 style={title}>지출 증빙 · 변제 양식 자동 생성기</h1>
-        <p style={subtitle}>
-          카드 사용 내역 파일(.xls / .xlsx)을 올리면 <b>Expense</b>와{" "}
-          <b>Travel</b> 두 개의 제출 양식을 만들어 ZIP으로 다운로드합니다.
-          카드사가 달라도 자동 인식합니다.
-        </p>
-
-        <div style={navRow}>
-          <a href="/learned" style={navBtn}>
-            📚 학습 데이터 관리
-          </a>
-          <a
-            href="/manual.pdf"
-            download="Expense Tool 사용 설명서.pdf"
-            style={navBtn}
-          >
-            📖 사용 설명서
-          </a>
-          <a
-            href="/manual.pdf"
-            target="_blank"
-            rel="noopener noreferrer"
-            style={navBtnGhost}
-          >
-            ↗ 새 탭에서 보기
-          </a>
-        </div>
+        <h1 style={title}>Expense Tool</h1>
 
         {resume && !rows && !loading && (
           <div style={resumeBox}>
@@ -889,11 +863,20 @@ export default function Home() {
           </div>
         )}
 
-        <p style={hint}>
-          💡 분류가 애매하거나 취소·환불이 있는 항목은 확인 창이 뜨고, 항목별로
-          체크한 분류는 서버에 저장돼 다음부터 ��두에게 자동 적용됩니다
-          {persistent ? "" : " (공유 저장소 미설정: 현재는 임시 저장)"}.
-        </p>
+        <div style={footerNav}>
+          <a href="/learned" style={navBtn}>
+            📚 학습 데이터 관리
+          </a>
+          <a
+            href="/manual.pdf"
+            target="_blank"
+            rel="noopener noreferrer"
+            style={navBtn}
+          >
+            📖 사용 설명서
+          </a>
+        </div>
+        <p style={versionText}>Expense Tool v{APP_VERSION}</p>
       </div>
 
       {reviewOpen && (
@@ -1162,7 +1145,6 @@ export default function Home() {
           </div>
         </div>
       )}
-      <p style={versionText}>Expense Tool v{APP_VERSION}</p>
     </main>
   );
 }
@@ -1317,8 +1299,16 @@ const navBtnGhost: CSSProperties = {
   textDecoration: "none",
   fontWeight: 600,
 };
+const footerNav: CSSProperties = {
+  display: "flex",
+  gap: 8,
+  flexWrap: "wrap",
+  justifyContent: "center",
+  marginTop: 28,
+};
 const versionText: CSSProperties = {
-  marginTop: 16,
+  marginTop: 12,
+  marginBottom: 0,
   textAlign: "center",
   fontSize: 12,
   color: "#9aa3ad",
