@@ -92,6 +92,10 @@ interface Payload {
   cancel?: { amount: number };
 }
 
+// 버그·오류 제보 연락처 (메인 화면 하단에 표시)
+const BUG_REPORT_NAME = "Hyeongju Han";
+const BUG_REPORT_WECHAT = "wxid_04j0cuchr1j122";
+
 function fmt(n: number): string {
   return (n || 0).toLocaleString("ko-KR");
 }
@@ -108,6 +112,8 @@ export default function Home() {
   const [done, setDone] = useState(false);
   // 진행 상황 메시지 (분류·다운로드 중 단계 표시)
   const [progress, setProgress] = useState<string | null>(null);
+  // 버그 제보 위챗 ID 복사 완료 표시
+  const [wechatCopied, setWechatCopied] = useState(false);
 
   // 이전 작업 이어하기용 저장 형식
   type SavedWork = {
@@ -258,6 +264,25 @@ export default function Home() {
       /* 무시 */
     }
     setResume(null);
+  }
+
+  // 위챗 ID를 클립보드에 복사한다. clipboard API가 막힌 환경(http 등)에서는
+  // 임시 textarea + execCommand 로 대신 복사한다.
+  async function copyWechatId() {
+    try {
+      await navigator.clipboard.writeText(BUG_REPORT_WECHAT);
+    } catch {
+      const ta = document.createElement("textarea");
+      ta.value = BUG_REPORT_WECHAT;
+      ta.style.position = "fixed";
+      ta.style.opacity = "0";
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand("copy");
+      document.body.removeChild(ta);
+    }
+    setWechatCopied(true);
+    setTimeout(() => setWechatCopied(false), 2000);
   }
 
   // AI 오류 메시지를 사용자 친화적인 한국어로 바꾼다 (크레딧 소진 등)
@@ -876,6 +901,22 @@ export default function Home() {
             📖 사용 설명서
           </a>
         </div>
+        <div style={bugBox}>
+          <div style={bugTitle}>🐞 버그·오류 제보</div>
+          <div style={bugRow}>
+            <span>
+              {BUG_REPORT_NAME} · WeChat{" "}
+              <span style={bugId}>{BUG_REPORT_WECHAT}</span>
+            </span>
+            <button
+              type="button"
+              style={wechatCopied ? bugCopyBtnDone : bugCopyBtn}
+              onClick={copyWechatId}
+            >
+              {wechatCopied ? "✅ 복사됨" : "📋 ID 복사"}
+            </button>
+          </div>
+        </div>
         <p style={versionText}>Expense Tool v{APP_VERSION}</p>
       </div>
 
@@ -1305,6 +1346,47 @@ const footerNav: CSSProperties = {
   flexWrap: "wrap",
   justifyContent: "center",
   marginTop: 28,
+};
+const bugBox: CSSProperties = {
+  marginTop: 20,
+  padding: "10px 14px",
+  borderRadius: 8,
+  background: "#f7f8fa",
+  border: "1px solid #e6e8eb",
+  fontSize: 13,
+  color: "#3a4149",
+};
+const bugTitle: CSSProperties = {
+  fontWeight: 600,
+  marginBottom: 6,
+};
+const bugRow: CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "space-between",
+  gap: 8,
+  flexWrap: "wrap",
+};
+const bugId: CSSProperties = {
+  fontFamily: "monospace",
+  color: "#1f2329",
+};
+const bugCopyBtn: CSSProperties = {
+  padding: "6px 12px",
+  borderRadius: 8,
+  border: "1px solid #c9daf8",
+  background: "#f0f5ff",
+  color: "#2d6cdf",
+  fontSize: 12.5,
+  fontWeight: 600,
+  cursor: "pointer",
+  whiteSpace: "nowrap",
+};
+const bugCopyBtnDone: CSSProperties = {
+  ...bugCopyBtn,
+  border: "1px solid #bfe6cb",
+  background: "#eaf7ee",
+  color: "#1e874b",
 };
 const versionText: CSSProperties = {
   marginTop: 12,
