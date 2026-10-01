@@ -39,7 +39,7 @@
 1. 이 폴더 내용을 GitHub 저장소에 업로드.
 2. Vercel → Add New → Project → 저장소 Import (Next.js 자동 인식).
 3. **Environment Variables**:
-   - `OPENAI_API_KEY` (권장) / `OPENAI_MODEL=gpt-4o-mini`
+   - `OPENAI_API_KEY` (권장) / `OPENAI_MODEL=gpt-5-mini`
    - 공유 학습용: Vercel → Storage → KV(Upstash Redis) 생성 후 Connect → `KV_REST_API_URL`/`KV_REST_API_TOKEN` 자동 주입
 4. Deploy → URL을 사내에 공유.
 

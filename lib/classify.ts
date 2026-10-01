@@ -116,11 +116,21 @@ function outcomeToCategory(
   return { group: "travel", category: resolveTravel(o.travelSubtype, foreign) };
 }
 
+// 짧은 영문 키워드(kt, ups, inn 등)는 다른 단어 속에 우연히 들어가 오분류를
+// 일으킨다(예: "ktx" 안의 "kt" → 전화요금, "innisfree" 안의 "inn" → 숙박).
+// 그래서 3글자 이하 영문·숫자 키워드는 앞뒤가 영문·숫자가 아닐 때(= 독립된
+// 단어일 때)만 일치로 본다. 한글과 붙은 경우("kt강남지사")는 그대로 인정한다.
+function keywordMatches(hay: string, keyword: string): boolean {
+  const k = keyword.toLowerCase();
+  if (!/^[a-z0-9]{1,3}$/.test(k)) return hay.includes(k);
+  return new RegExp(`(^|[^a-z0-9])${k}($|[^a-z0-9])`).test(hay);
+}
+
 function matchRules(text: string, rules: typeof RULES): Outcome | null {
   const hay = (text || "").toLowerCase();
   if (!hay) return null;
   for (const rule of rules) {
-    if (rule.keywords.some((k) => hay.includes(k.toLowerCase()))) return rule;
+    if (rule.keywords.some((k) => keywordMatches(hay, k))) return rule;
   }
   return null;
 }
@@ -152,7 +162,7 @@ async function classifyByAI(
     number,
     { category: Category | "UNCLASSIFIED"; confidence: number }
   >();
-  const model = process.env.OPENAI_MODEL || "gpt-4o-mini";
+  const model = process.env.OPENAI_MODEL || "gpt-5-mini";
   const diag: AiDiagnostic = {
     status: "ok",
     model,
@@ -201,16 +211,23 @@ async function classifyByAI(
     'Classify each transaction. Return JSON {"results":[{"id":number,"category":string,"confidence":0..1}]}.\n' +
     JSON.stringify(items);
 
+  // GPT-5·o 계열(추론 모델)은 temperature 를 보내면 400 오류가 난다.
+  // 대신 reasoning_effort 를 낮게 줘서 응답 속도를 확보한다(단순 분류 작업).
+  // 구형 모델(gpt-4o-mini 등)은 기존처럼 temperature 0 으로 결과를 고정한다.
+  const isReasoningModel = /^(gpt-5|o\d)/i.test(model);
+
   try {
     const resp = await client.chat.completions.create({
       model,
-      temperature: 0,
+      ...(isReasoningModel
+        ? { reasoning_effort: "low" }
+        : { temperature: 0 }),
       response_format: { type: "json_object" },
       messages: [
         { role: "system", content: system },
         { role: "user", content: user },
       ],
-    });
+    } as any);
     const parsed = JSON.parse(resp.choices[0]?.message?.content || "{}") as {
       results?: { id: number; category: string; confidence?: number }[];
     };
