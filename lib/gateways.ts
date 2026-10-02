@@ -89,3 +89,15 @@ export function looksLikeGateway(merchant: string | undefined | null): boolean {
 
 // 검토 팝업/관리 페이지에서 "PSP로 표시"를 의미하는 분류 sentinel 값.
 export const PSP_MARK = "__GATEWAY__";
+
+// 분류 기록(history)에서 '삭제'를 나타내는 표시값 (학습 데이터 / 결제대행사 삭제).
+export const DELETED_MARK = "__DELETED__";
+export const DELETED_GATEWAY_MARK = "__DELETED_GATEWAY__";
+
+// 분류 기록의 category 값을 화면 표시용 문구로 바꾼다.
+export function historyLabel(category: string): string {
+  if (category === PSP_MARK) return "결제대행사로 등록";
+  if (category === DELETED_MARK) return "🗑 학습 데이터 삭제";
+  if (category === DELETED_GATEWAY_MARK) return "🗑 결제대행사 삭제";
+  return category;
+}

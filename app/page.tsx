@@ -25,6 +25,7 @@ import {
   readJsonSafe,
 } from "@/lib/receiptsClient";
 import type { ParsedReceipts } from "@/lib/parseReceipts";
+import { matchReceipts, type RowMeta } from "@/lib/buildReceiptPdf";
 
 interface Row {
   id: number;
@@ -97,6 +98,7 @@ interface Payload {
   approval: string;
   cancel?: { amount: number };
   id?: number; // 원본 행 id (최종 검토에서 분류 수정용, 고아 환불 행은 없음)
+  source?: string; // 분류 방식 (사용 통계용)
 }
 
 const VALID_CATEGORIES = new Set<string>(ALL_CATEGORIES);
@@ -144,11 +146,14 @@ export default function Home() {
     gatewayChoice: Record<number, boolean>;
     aiDiag: AiDiagnostic | null;
     persistent: boolean;
+    batchId?: string;
   };
   const [resume, setResume] = useState<SavedWork | null>(null);
   const [aiDiag, setAiDiag] = useState<AiDiagnostic | null>(null);
 
   const [rows, setRows] = useState<Row[] | null>(null);
+  // 분류 작업 1회를 구분하는 id. 같은 작업을 여러 번 다운로드해도 통계가 한 번만 잡힌다.
+  const [batchId, setBatchId] = useState("");
   const [stats, setStats] = useState<Stats | null>(null);
   const [persistent, setPersistent] = useState(false);
   const [userName, setUserName] = useState("");
@@ -173,6 +178,12 @@ export default function Home() {
 
   const [reviewOpen, setReviewOpen] = useState(false);
   const [finalOpen, setFinalOpen] = useState(false);
+  // 최종 검토에서 영수증 매칭 결과를 보여 주기 위한 영수증 파싱 결과
+  const [receiptParsed, setReceiptParsed] = useState<ParsedReceipts | null>(
+    null,
+  );
+  const [receiptLoading, setReceiptLoading] = useState(false);
+  const [receiptErr, setReceiptErr] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
 
   const reviewRows = useMemo(
@@ -208,6 +219,8 @@ export default function Home() {
     setLearnChoice({});
     setGatewayChoice({});
     setFinalOpen(false);
+    setReceiptParsed(null);
+    setReceiptErr(null);
   }
 
   // 영수증 PDF 병합/파싱 결과 캐시 (분류하기 → 다운로드에서 재사용).
@@ -248,6 +261,7 @@ export default function Home() {
         gatewayChoice,
         aiDiag,
         persistent,
+        batchId,
       };
       localStorage.setItem(WORK_KEY, JSON.stringify(saved));
     } catch {
@@ -263,6 +277,7 @@ export default function Home() {
     gatewayChoice,
     aiDiag,
     persistent,
+    batchId,
   ]);
 
   function restoreWork() {
@@ -276,6 +291,10 @@ export default function Home() {
     setGatewayChoice(resume.gatewayChoice || {});
     setAiDiag(resume.aiDiag ?? null);
     setPersistent(!!resume.persistent);
+    setBatchId(
+      resume.batchId ||
+        Date.now().toString(36) + Math.random().toString(36).slice(2, 8),
+    );
     setError(null);
     setDone(false);
     setResume(null);
@@ -331,6 +350,31 @@ export default function Home() {
     receiptCache.current = entry;
     return entry;
   }
+
+  // 최종 검토를 열면 영수증 PDF를 미리 분석해 둔다(매칭 결과 표시용).
+  // 결과는 receiptCache 에 남아 다운로드할 때 그대로 재사용된다.
+  useEffect(() => {
+    if (!finalOpen || mode === "excel" || receiptFiles.length === 0) return;
+    if (receiptParsed || receiptLoading) return;
+    let cancelled = false;
+    setReceiptLoading(true);
+    setReceiptErr(null);
+    ensureReceiptsParsed()
+      .then((rc) => {
+        if (!cancelled) setReceiptParsed(rc.parsed);
+      })
+      .catch((e: any) => {
+        if (!cancelled) setReceiptErr(e?.message || "영수증 분석 실패");
+      })
+      .finally(() => {
+        setReceiptLoading(false);
+        setProgress(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [finalOpen, mode, receiptFiles]);
 
   function addExcelFiles(list: FileList | null) {
     if (!list || list.length === 0) return;
@@ -398,6 +442,9 @@ export default function Home() {
         aiCheck: r.source === "ai" && !r.needsReview,
       }));
       const questions = (data.cancelQuestions || []) as CancelQuestion[];
+      setBatchId(
+        Date.now().toString(36) + Math.random().toString(36).slice(2, 8),
+      );
       setRows(newRows);
       setStats(data.stats);
       setPersistent(!!data.persistent);
@@ -542,6 +589,7 @@ export default function Home() {
     for (const r of rows || []) {
       const base: Payload = {
         id: r.id,
+        source: r.source,
         date: r.date,
         merchant: r.merchant,
         amount: r.amount,
@@ -597,7 +645,7 @@ export default function Home() {
       const res = await fetch("/api/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ rows: payload }),
+        body: JSON.stringify({ rows: payload, batchId }),
       });
       if (!res.ok) {
         let msg = `Failed (${res.status})`;
@@ -647,6 +695,26 @@ export default function Home() {
   const sumAmount = (list: Payload[]) =>
     list.reduce((s, p) => s + (p.amount || 0), 0);
 
+  // 영수증 매칭 미리보기: 다운로드 때(attachReceiptsToZip)와 같은 순서·규칙으로 매칭한다.
+  const hasReceipts = mode !== "excel" && receiptFiles.length > 0;
+  const toMeta = (list: Payload[]): RowMeta[] =>
+    list.map((p) => ({
+      approval: p.approval || "",
+      merchant: p.merchant,
+      cancel: p.cancel,
+    }));
+  const receiptMatch =
+    finalOpen && hasReceipts && receiptParsed && receiptParsed.receipts.length > 0
+      ? matchReceipts(
+          toMeta(finalExpense),
+          toMeta(finalTravel),
+          receiptParsed.receipts,
+        )
+      : null;
+  const receiptMissing = receiptMatch
+    ? receiptMatch.expense.missingRows + receiptMatch.travel.missingRows
+    : 0;
+
   function renderCategorySelect(
     value: string,
     onChange: (v: string) => void,
@@ -673,7 +741,11 @@ export default function Home() {
     );
   }
 
-  function renderFinalSection(label: string, list: Payload[]) {
+  function renderFinalSection(
+    label: string,
+    list: Payload[],
+    matched?: boolean[],
+  ) {
     return (
       <div style={finalSection}>
         <div style={finalHeader}>
@@ -699,6 +771,13 @@ export default function Home() {
                 </span>
                 <span style={listAmount}>{fmt(p.amount)}원</span>
               </div>
+              {matched && (
+                <div style={matched[i] ? receiptOk : receiptMissingText}>
+                  {matched[i]
+                    ? "🧾 영수증 매칭됨"
+                    : "⚠️ 영수증 없음 — 영수증 PDF에서 이 항목은 빠져요"}
+                </div>
+              )}
               {p.id !== undefined ? (
                 renderCategorySelect(
                   p.category,
@@ -1128,6 +1207,9 @@ export default function Home() {
           >
             📖 사용 설명서
           </a>
+          <a href="/stats" style={navBtn}>
+            📊 통계
+          </a>
           <a href="/changelog" style={navBtn}>
             🆕 업데이트 이력
           </a>
@@ -1157,7 +1239,7 @@ export default function Home() {
             <h2 style={modalTitle}>확인이 필요한 항목</h2>
             <p style={modalSub}>
               아래 항목들을 확인해 주세요. 취소·환불 여부와 분류를 정하면
-              ���대로 ���셀에 반영됩니다.
+              그대로 엑셀에 반영됩니다.
             </p>
 
             <div style={reviewList}>
@@ -1182,7 +1264,7 @@ export default function Home() {
                         {q.cancelDate ? " (" + q.cancelDate + ")" : ""}
                       </div>
                       <div style={reviewQuestion}>
-                        승인번호가 달라 ���정한 매칭입니다. 같은 가맹점·같은
+                        승인번호가 달라 추정한 매칭입니다. 같은 가맹점·같은
                         금액의 취소로 보이는데, 이 결제의 취소가 맞나요?
                       </div>
                     </div>
@@ -1231,7 +1313,7 @@ export default function Home() {
 
               {reviewRows.length > 0 && (
                 <div style={sectionRow}>
-                  <div style={sectionLabel}>🯷 분류 확인</div>
+                  <div style={sectionLabel}>🏷️ 분류 확인</div>
                   <div style={sectionTools}>
                     학습
                     <button
@@ -1341,12 +1423,57 @@ export default function Home() {
                     ? ` · 취소·환불로 제외 ${fmt(finalExcluded)}건`
                     : ""}
                 </div>
-                {mode !== "excel" && receiptFiles.length > 0 && (
-                  <div style={mutedText}>
-                    🧾 영수증 PDF도 엑셀 순서대로 함께 만들어져요.
+                {hasReceipts && receiptLoading && (
+                  <div style={mutedText}>🧾 영수증 PDF 분석 중… 잠시만요</div>
+                )}
+                {hasReceipts && receiptMatch && (
+                  <div>
+                    🧾 영수증 매칭 · Expense{" "}
+                    {fmt(receiptMatch.expense.matchedRows)}/
+                    {fmt(finalExpense.length)} · Travel{" "}
+                    {fmt(receiptMatch.travel.matchedRows)}/
+                    {fmt(finalTravel.length)}
+                    {receiptMissing === 0 ? " ✅" : ""}
                   </div>
                 )}
               </div>
+              {hasReceipts && receiptErr && (
+                <div style={finalWarnBox}>
+                  ⚠️ 영수증 분석 실패 — {receiptErr}
+                </div>
+              )}
+              {hasReceipts &&
+                receiptParsed &&
+                receiptParsed.receipts.length === 0 && (
+                  <div style={finalWarnBox}>
+                    ⚠️ 영수증 PDF에서 영수증을 인식하지 못했어요. 이대로
+                    다운로드하면 영수증 PDF는 만들어지지 않아요.
+                  </div>
+                )}
+              {receiptMatch && receiptMissing > 0 && (
+                <div style={finalWarnBox}>
+                  ⚠️ 영수증을 찾지 못한 항목 {fmt(receiptMissing)}건 — 아래
+                  &apos;영수증 없음&apos; 표시를 확인하고, 빠진 영수증을 추가로
+                  첨부해 주세요.
+                </div>
+              )}
+              {receiptMatch && receiptMatch.leftover.length > 0 && (
+                <details style={leftoverBox}>
+                  <summary style={leftoverSummary}>
+                    🧾 어느 항목에도 맞지 않은 영수증{" "}
+                    {fmt(receiptMatch.leftover.length)}장 (영수증 PDF에서
+                    빠져요)
+                  </summary>
+                  {receiptMatch.leftover.map((lo, i) => (
+                    <div key={i} style={leftoverRow}>
+                      {lo.page + 1}페이지 · {lo.merchant || "(가맹점명 없음)"}
+                      {lo.amount ? ` · ${fmt(lo.amount)}원` : ""}
+                      {lo.date ? ` · ${lo.date}` : ""}
+                      {lo.canceled ? " · 취소 영수증" : ""}
+                    </div>
+                  ))}
+                </details>
+              )}
               {finalUnclassified > 0 && (
                 <div style={finalWarnBox}>
                   ⚠️ 미분류 {fmt(finalUnclassified)}건 — 이대로 다운로드하면
@@ -1371,8 +1498,16 @@ export default function Home() {
                   </button>
                 </div>
               )}
-              {renderFinalSection("🧾 Expense", finalExpense)}
-              {renderFinalSection("✈️ Travel", finalTravel)}
+              {renderFinalSection(
+                "🧾 Expense",
+                finalExpense,
+                receiptMatch?.expense.rowMatched,
+              )}
+              {renderFinalSection(
+                "✈️ Travel",
+                finalTravel,
+                receiptMatch?.travel.rowMatched,
+              )}
             </div>
 
             <div style={modalActions}>
@@ -1385,8 +1520,8 @@ export default function Home() {
               </button>
               <button
                 type="button"
-                style={primaryBtn}
-                disabled={downloading}
+                style={downloading || receiptLoading ? primaryBtnDisabled : primaryBtn}
+                disabled={downloading || receiptLoading}
                 onClick={() => {
                   setFinalOpen(false);
                   download();
@@ -1764,6 +1899,30 @@ const finalWarnBox: CSSProperties = {
   marginBottom: 8,
 };
 const finalSection: CSSProperties = { marginTop: 12 };
+const receiptOk: CSSProperties = { fontSize: 11.5, color: "#1e874b" };
+const receiptMissingText: CSSProperties = {
+  fontSize: 11.5,
+  color: "#c0392b",
+  fontWeight: 600,
+};
+const leftoverBox: CSSProperties = {
+  padding: "8px 12px",
+  borderRadius: 8,
+  background: "#fff8e6",
+  border: "1px solid #f0dfae",
+  fontSize: 12.5,
+  marginBottom: 8,
+};
+const leftoverSummary: CSSProperties = {
+  cursor: "pointer",
+  fontWeight: 600,
+  color: "#8a6100",
+};
+const leftoverRow: CSSProperties = {
+  padding: "4px 0",
+  borderTop: "1px solid #f3e6c4",
+  color: "#5f4b00",
+};
 const finalHeader: CSSProperties = {
   display: "flex",
   justifyContent: "space-between",
@@ -1843,6 +2002,12 @@ const primaryBtn: CSSProperties = {
   fontSize: 14,
   fontWeight: 600,
   cursor: "pointer",
+};
+
+const primaryBtnDisabled: CSSProperties = {
+  ...primaryBtn,
+  background: "#c7ccd3",
+  cursor: "not-allowed",
 };
 
 const modeRow: CSSProperties = {

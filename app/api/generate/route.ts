@@ -9,6 +9,7 @@ import {
   type Category,
 } from "@/lib/categories";
 import { parseReceiptPdf } from "@/lib/parseReceipts";
+import { saveUsage } from "@/lib/store";
 import {
   matchReceipts,
   renderReceiptPdf,
@@ -37,6 +38,44 @@ interface IncomingRow {
   category: string;
   approval?: string;
   cancel?: { amount: number };
+  source?: string; // 분류 방식 (learned / mcc / rule / ai / gateway / none ...)
+}
+
+// 분류 방식을 통계용 4가지로 묶는다.
+function sourceBucket(source?: string): string {
+  if (source === "learned") return "learned";
+  if (source === "mcc" || source === "rule") return "rule";
+  if (source === "ai") return "ai";
+  return "manual";
+}
+
+// 사용 통계 저장(실패해도 다운로드는 계속).
+async function recordUsage(batchId: string, rows: IncomingRow[]) {
+  try {
+    const valid = new Set<string>(ALL_CATEGORIES);
+    const byCategory: Record<string, { n: number; amount: number }> = {};
+    const bySource: Record<string, number> = {};
+    let amount = 0;
+    for (const r of rows) {
+      const a = Number(r.amount) || 0;
+      const cat = r.category && valid.has(r.category) ? r.category : UNCLASSIFIED;
+      amount += a;
+      byCategory[cat] = byCategory[cat] || { n: 0, amount: 0 };
+      byCategory[cat].n++;
+      byCategory[cat].amount += a;
+      const b = sourceBucket(r.source);
+      bySource[b] = (bySource[b] || 0) + 1;
+    }
+    await saveUsage(batchId, {
+      at: new Date().toISOString(),
+      rows: rows.length,
+      amount,
+      byCategory,
+      bySource,
+    });
+  } catch (e) {
+    console.error("usage record failed:", e);
+  }
 }
 
 // Step 2: build the two filled forms from the user-finalized rows, and -- if a
@@ -45,6 +84,7 @@ interface IncomingRow {
 export async function POST(req: NextRequest) {
   try {
     let rows: IncomingRow[] = [];
+    let batchId = "";
     let receiptBytes: Uint8Array | null = null;
 
     const ctype = req.headers.get("content-type") || "";
@@ -63,13 +103,19 @@ export async function POST(req: NextRequest) {
         receiptBytes = await mergePdfs(parts);
       }
     } else {
-      const body = (await req.json()) as { rows?: IncomingRow[] };
+      const body = (await req.json()) as {
+        rows?: IncomingRow[];
+        batchId?: string;
+      };
       rows = Array.isArray(body.rows) ? body.rows : [];
+      batchId = typeof body.batchId === "string" ? body.batchId : "";
     }
 
     if (!Array.isArray(rows) || rows.length === 0) {
       return NextResponse.json({ error: "No rows provided" }, { status: 400 });
     }
+
+    if (batchId) await recordUsage(batchId, rows);
 
     const valid = new Set<string>(ALL_CATEGORIES);
     const expenseRows: FormRow[] = [];

@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import { EXPENSE_CATEGORIES, TRAVEL_CATEGORIES } from "@/lib/categories";
-import { PSP_MARK } from "@/lib/gateways";
+import { PSP_MARK, historyLabel } from "@/lib/gateways";
 
 interface Gateway {
   merchant: string;
@@ -160,6 +160,7 @@ export default function LearnedPage() {
   const authorsByKey = useMemo(() => {
     const m = new Map<string, { by: string; at: string }[]>();
     for (const h of history) {
+      if (h.source === "delete") continue; // 삭제한 사람은 분류자가 아님
       const by = h.by && h.by.trim() ? h.by.trim() : "익명";
       const list = m.get(h.key) || [];
       if (!list.some((a) => a.by === by)) list.push({ by, at: h.at });
@@ -287,6 +288,24 @@ export default function LearnedPage() {
     }
   }
 
+  // 삭제·변경은 분류 기록에 이름이 남으므로, 이름이 비어 있으면 한 번 물어본다.
+  // 입력한 이름은 브라우저에 기억해 다음부터 다시 묻지 않는다.
+  function ensureUserName(): string {
+    let name = userName.trim();
+    if (!name) {
+      name = (prompt("분류 기록에 남길 이름을 입력해 주세요.") || "").trim();
+      if (name) {
+        setUserName(name);
+        try {
+          localStorage.setItem("expense_tool_user_name", name);
+        } catch {
+          /* ignore */
+        }
+      }
+    }
+    return name;
+  }
+
   async function remove(merchant: string) {
     if (
       !confirm(
@@ -295,12 +314,13 @@ export default function LearnedPage() {
       )
     )
       return;
+    const by = ensureUserName();
     setBusy(merchant);
     try {
       const res = await fetch("/api/learn", {
         method: "DELETE",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ merchant }),
+        body: JSON.stringify({ merchant, by }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error || "삭제 실패");
@@ -321,6 +341,7 @@ export default function LearnedPage() {
       )
     )
       return;
+    const by = ensureUserName();
     setBusy(merchant);
     try {
       const res = await fetch("/api/learn", {
@@ -330,6 +351,7 @@ export default function LearnedPage() {
           oldMerchant: merchant,
           merchant,
           category: PSP_MARK,
+          by,
         }),
       });
       const data = await res.json();
@@ -349,12 +371,13 @@ export default function LearnedPage() {
       )
     )
       return;
+    const by = ensureUserName();
     setBusy("g:" + merchant);
     try {
       const res = await fetch("/api/learn", {
         method: "DELETE",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ merchant, kind: "gateway" }),
+        body: JSON.stringify({ merchant, kind: "gateway", by }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error || "삭제 실패");
@@ -641,7 +664,7 @@ export default function LearnedPage() {
             체크하거나 위 목록에서 '결제대행사로' 버튼을 누르면 여기 추가됩니다.
           </p>
           {gateways.length === 0 ? (
-            <p style={muted}>아직 등록�� 결제대행사가 없습니다.</p>
+            <p style={muted}>아직 등록된 결제대행사가 없습니다.</p>
           ) : (
             <table style={table}>
               <thead>
@@ -674,7 +697,7 @@ export default function LearnedPage() {
           <h2 style={gwTitle}>📜 분류 기록 · 최근 {history.length}건</h2>
           <p style={subtitle}>
             같은 사람이 30분 이내에 연속으로 분류한 기록을 한 묶음으로 보여줍니다
-            (최신순). 묶음을 클릭하면 상세 분류 내역이 펼쳌집니다.
+            (최신순). 묶음을 클릭하면 상세 분류 내역이 펼쳐집니다.
           </p>
           {historyAuthors.length > 0 && (
             <div style={histFilterRow}>
@@ -734,9 +757,7 @@ export default function LearnedPage() {
                                 <td style={td}>{fmtAt(h.at)}</td>
                                 <td style={td}>{h.merchant}</td>
                                 <td style={tdCat}>
-                                  {h.category === "__GATEWAY__"
-                                    ? "결제대행사"
-                                    : h.category}
+                                  {historyLabel(h.category)}
                                 </td>
                               </tr>
                             ))}
@@ -753,7 +774,7 @@ export default function LearnedPage() {
 
         <p style={hint}>
           수정은 분류뿐 아니라 가맹점명도 바꿀 수 있습니다(이름을 바꿀 경우 기존
-          항목은 자동으로 ���겨집니다). 모든 변경은 공유 저장소에 즉시 반영되어
+          항목은 자동으로 옮겨집니다). 모든 변경은 공유 저장소에 즉시 반영되어
           전체 사용자에게 적용됩니다. 원본 데이터는 Vercel → Storage →
           KV(Upstash) 데이터 브라우저의 해시{" "}
           <code>expense_merchant_categories</code> 에서도 볼 수 있습니다.

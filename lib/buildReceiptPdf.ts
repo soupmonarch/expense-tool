@@ -24,7 +24,7 @@ export interface RowMeta {
 interface Half {
   page: number;
   side: "L" | "R";
-  // 그리드형 양식(한 컩럼에 여러 장): 이 영수증의 실제 crop 영역
+  // 그리드형 양식(한 컬럼에 여러 장): 이 영수증의 실제 crop 영역
   box?: ReceiptBox;
 }
 
@@ -33,6 +33,7 @@ export interface MatchPlan {
   pages: Half[][];
   matchedRows: number; // 영수증을 찾은 행 수
   missingRows: number; // 영수증을 못 찾은 행 수
+  rowMatched: boolean[]; // 입력 행 순서대로 구매 영수증을 찾았는지 (화면 표시용)
 }
 
 export interface MatchSummary {
@@ -91,11 +92,13 @@ export function matchReceipts(
 
   function planFor(rows: RowMeta[]): MatchPlan {
     const pages: Half[][] = [];
+    const rowMatched: boolean[] = [];
     let matched = 0;
     let missing = 0;
     for (const meta of rows) {
       const halves: Half[] = [];
       const pIdx = takePurchase(meta);
+      rowMatched.push(pIdx >= 0);
       if (pIdx >= 0) {
         used.add(pIdx);
         halves.push({
@@ -118,7 +121,7 @@ export function matchReceipts(
       }
       if (halves.length > 0) pages.push(halves);
     }
-    return { pages, matchedRows: matched, missingRows: missing };
+    return { pages, matchedRows: matched, missingRows: missing, rowMatched };
   }
 
   const expense = planFor(expenseRows);

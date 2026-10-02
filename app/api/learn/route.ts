@@ -12,7 +12,12 @@ import {
   getHistory,
 } from "@/lib/store";
 import { ALL_CATEGORIES, groupOf, type Category } from "@/lib/categories";
-import { isPaymentGateway, PSP_MARK } from "@/lib/gateways";
+import {
+  isPaymentGateway,
+  PSP_MARK,
+  DELETED_MARK,
+  DELETED_GATEWAY_MARK,
+} from "@/lib/gateways";
 
 export const runtime = "nodejs";
 
@@ -194,18 +199,30 @@ export async function PUT(req: NextRequest) {
 // DELETE: 공유 저장소에서 매핑 하나를 제거한다(잘못 학습된 항목 수정용).
 export async function DELETE(req: NextRequest) {
   try {
-    const body = (await req.json()) as { merchant?: string; kind?: string };
+    const body = (await req.json()) as {
+      merchant?: string;
+      kind?: string;
+      by?: string;
+    };
     if (!body?.merchant) {
       return NextResponse.json(
         { error: "merchant is required" },
         { status: 400 },
       );
     }
-    if (body.kind === "gateway") {
+    const isGateway = body.kind === "gateway";
+    if (isGateway) {
       await deleteLearnedGateway(body.merchant);
     } else {
       await deleteLearned(body.merchant);
     }
+    // 누가 언제 무엇을 지웠는지 분류 기록에 남긴다.
+    await appendHistory({
+      merchant: body.merchant,
+      category: isGateway ? DELETED_GATEWAY_MARK : DELETED_MARK,
+      by: (body.by || "").trim(),
+      source: "delete",
+    });
     return NextResponse.json({ ok: true, persistent: kvEnabled() });
   } catch (err: any) {
     console.error(err);

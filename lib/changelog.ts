@@ -10,6 +10,16 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.3.0",
+    date: "2026-10-02",
+    changes: [
+      "📊 사용 통계 페이지 추가 — 월별 사용액, 분류별 금액, 분류 방식(학습/규칙/AI/직접) 비율, 학습 현황",
+      "최종 검토 화면에 영수증 매칭 결과 표시 — '영수증 없음' 항목과 남는 영수증을 다운로드 전에 확인",
+      "학습 데이터 삭제·결제대행사 변경도 분류 기록에 남김 (누가 언제 지웠는지)",
+      "화면의 깨진 글자 수정",
+    ],
+  },
+  {
     version: "2.2.0",
     date: "2026-10-02",
     changes: [

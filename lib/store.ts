@@ -177,6 +177,53 @@ export async function appendHistory(
   if (historyMemory.length > MAX_HISTORY) historyMemory.length = MAX_HISTORY;
 }
 
+// ---------------------------------------------------------------------------
+// 사용 통계: 엑셀을 다운로드할 때마다 그 작업(batch)의 요약(건수·금액·분류별·
+// 분류 방식별)을 저장한다. 같은 작업을 여러 번 다운로드해도 batchId 가 같아
+// 덮어쓰므로 중복 집계되지 않는다. 가맹점명·사람 이름은 저장하지 않는다.
+// ---------------------------------------------------------------------------
+const USAGE_HASH = "expense_usage_stats";
+const usageMemory = new Map<string, UsageSummary>();
+
+export interface UsageSummary {
+  at: string; // ISO 타임스탬프 (다운로드 시각)
+  rows: number;
+  amount: number;
+  byCategory: Record<string, { n: number; amount: number }>;
+  bySource: Record<string, number>; // learned | rule | ai | manual
+}
+
+export async function saveUsage(
+  batchId: string,
+  summary: UsageSummary,
+): Promise<void> {
+  const id = String(batchId || "").slice(0, 64);
+  if (!id) return;
+  if (kvEnabled()) {
+    try {
+      await kv.hset(USAGE_HASH, { [id]: JSON.stringify(summary) });
+      return;
+    } catch (e) {
+      console.error("KV usage write failed, using memory:", e);
+    }
+  }
+  usageMemory.set(id, summary);
+}
+
+export async function getAllUsage(): Promise<UsageSummary[]> {
+  if (kvEnabled()) {
+    try {
+      const map = await kv.hgetall<Record<string, unknown>>(USAGE_HASH);
+      return Object.values(map || {})
+        .map((v) => (typeof v === "string" ? JSON.parse(v) : v))
+        .filter(Boolean) as UsageSummary[];
+    } catch (e) {
+      console.error("KV usage read failed, using memory:", e);
+    }
+  }
+  return [...usageMemory.values()];
+}
+
 // 최신순 분류 기록을 반환한다(관리 페이지 표시용).
 export async function getHistory(limit = 200): Promise<HistoryEntry[]> {
   const n = Math.max(1, Math.min(limit, MAX_HISTORY));
