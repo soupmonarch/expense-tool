@@ -119,6 +119,29 @@ function toNumber(v: unknown): number {
   return Math.abs(toSignedNumber(v));
 }
 
+// 엑셀이 날짜를 '날짜 형식 셀'로 저장하면 값이 일련번호(예: 46268.77 = 2026-09-03
+// 18:30)로 읽힌다. 이를 "2026.09.03 18:30" 같은 글자로 바꾼다.
+// 날짜 열: 1 이상(날짜, 소수부는 시각) / 시간 열: 0~1 사이 소수(시각만)만 변환한다.
+// (20260903 같은 숫자 날짜, 1830 같은 숫자 시각은 엑셀 날짜가 아니므로 그대로 둔다)
+const EXCEL_MAX_SERIAL = 2958465; // 9999-12-31
+function pad2(n: number): string {
+  return String(n).padStart(2, "0");
+}
+function excelDateCell(v: unknown): string | null {
+  if (typeof v !== "number" || !isFinite(v) || v < 1 || v > EXCEL_MAX_SERIAL)
+    return null;
+  const p = XLSX.SSF.parse_date_code(v);
+  if (!p) return null;
+  const date = `${p.y}.${pad2(p.m)}.${pad2(p.d)}`;
+  // 시각이 00:00 이면 날짜만 있는 셀로 본다.
+  return p.H || p.M ? `${date} ${pad2(p.H)}:${pad2(p.M)}` : date;
+}
+function excelTimeCell(v: unknown): string | null {
+  if (typeof v !== "number" || !isFinite(v) || v <= 0 || v >= 1) return null;
+  const p = XLSX.SSF.parse_date_code(v);
+  return p ? `${pad2(p.H)}:${pad2(p.M)}` : null;
+}
+
 // 날짜 셀과(있다면) 시간 셀에서 날짜와 시간을 분리한다.
 // 별도 시간 열이 없으면 날짜 셀 안의 HH:mm 패턴을 추출한다.
 function splitDateTime(
@@ -127,12 +150,11 @@ function splitDateTime(
 ): { date?: string; time?: string } {
   let date = (dateRaw || "").trim();
   let time = (timeRaw || "").trim();
-  if (!time && date) {
-    const m = date.match(/(\d{1,2}:\d{2}(?::\d{2})?)/);
-    if (m) {
-      time = m[1];
-      date = date.replace(m[1], "").trim();
-    }
+  // 날짜 셀 안의 HH:mm 은 떼어 낸다. 별도 시간 열이 있으면 그 값을 우선한다.
+  const m = date.match(/(\d{1,2}:\d{2}(?::\d{2})?)/);
+  if (m) {
+    if (!time) time = m[1];
+    date = date.replace(m[1], "").trim();
   }
   if (time) {
     const tm = time.match(/(\d{1,2}):(\d{2})/);
@@ -152,7 +174,9 @@ export function parseStatement(
   buffer: Buffer,
   override?: ColumnMapping,
 ): ParseResult {
-  const wb = XLSX.read(buffer, { type: "buffer", cellDates: false });
+  // raw: CSV 같은 텍스트 파일은 값을 자동 변환하지 않고 글자 그대로 읽는다
+  // (자동 날짜 변환이 시간대 차이로 가짜 시각을 만들던 문제 방지). xls/xlsx 에는 영향 없음.
+  const wb = XLSX.read(buffer, { type: "buffer", cellDates: false, raw: true });
   const ws = wb.Sheets[wb.SheetNames[0]];
   const rows = XLSX.utils.sheet_to_json<unknown[]>(ws, {
     header: 1,
@@ -247,7 +271,11 @@ export function parseStatement(
       regionVal.toUpperCase().includes("OVERSEAS") ||
       (!regionVal && originCurrency !== "" && originCurrency !== "KRW");
 
-    const { date, time } = splitDateTime(get(row, m.date), get(row, m.time));
+    const dateCell =
+      (m.date !== undefined && excelDateCell(row[m.date])) || get(row, m.date);
+    const timeCell =
+      (m.time !== undefined && excelTimeCell(row[m.time])) || get(row, m.time);
+    const { date, time } = splitDateTime(dateCell, timeCell);
 
     transactions.push({
       rowIndex: r,

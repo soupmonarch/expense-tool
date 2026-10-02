@@ -10,6 +10,15 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.3.1",
+    date: "2026-10-02",
+    changes: [
+      "엑셀의 날짜 형식 칸이 '46268.77' 같은 숫자로 표시되던 문제 수정",
+      "CSV 파일의 날짜에 가짜 시각(09:00 등)이 붙던 문제 수정",
+      "사용 통계가 항상 '기록 없음'으로 나오던 문제 수정",
+    ],
+  },
+  {
     version: "2.3.0",
     date: "2026-10-02",
     changes: [

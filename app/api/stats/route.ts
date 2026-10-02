@@ -2,6 +2,8 @@ import { NextResponse } from "next/server";
 import { getAllUsage, kvEnabled } from "@/lib/store";
 
 export const runtime = "nodejs";
+// 요청 때마다 최신 통계를 읽는다(빌드 시점 결과로 고정되지 않도록).
+export const dynamic = "force-dynamic";
 
 interface MonthStats {
   month: string; // YYYY-MM (한국 시각 기준)
