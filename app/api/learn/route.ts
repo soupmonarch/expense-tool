@@ -27,7 +27,8 @@ export async function GET() {
   const [map, gatewayMap, history] = await Promise.all([
     getLearnedMap(),
     getLearnedGatewayMap(),
-    getHistory(300),
+    // 보관 중인 기록 전체(최대 1000건) — 가맹점별 분류자 목록을 빠짐없이 보여 주기 위함
+    getHistory(1000),
   ]);
   const valid = new Set<string>(ALL_CATEGORIES);
   const entries = Object.entries(map)

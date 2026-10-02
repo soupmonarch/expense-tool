@@ -155,10 +155,16 @@ export default function LearnedPage() {
     [filtered, pageSafe, pageSize],
   );
 
-  // 가맹점별 최근 분류자(history는 최신순이므로 첫 등장이 최신).
-  const latestBy = useMemo(() => {
-    const m = new Map<string, HistoryItem>();
-    for (const h of history) if (!m.has(h.key)) m.set(h.key, h);
+  // 가맹점별로 분류한 모든 사람(중복 제거, 최근에 분류한 사람부터).
+  // history는 최신순이므로 사람마다 첫 등장 시각이 그 사람의 최근 분류 시각이다.
+  const authorsByKey = useMemo(() => {
+    const m = new Map<string, { by: string; at: string }[]>();
+    for (const h of history) {
+      const by = h.by && h.by.trim() ? h.by.trim() : "익명";
+      const list = m.get(h.key) || [];
+      if (!list.some((a) => a.by === by)) list.push({ by, at: h.at });
+      m.set(h.key, list);
+    }
     return m;
   }, [history]);
 
@@ -480,7 +486,7 @@ export default function LearnedPage() {
                 <th style={th}>가맹점(정규화)</th>
                 <th style={th}>분류</th>
                 <th style={thC}>그룹</th>
-                <th style={thC}>최근 분류자</th>
+                <th style={thC}>분류자 (최근순)</th>
                 <th style={thC}>관리</th>
               </tr>
             </thead>
@@ -524,12 +530,17 @@ export default function LearnedPage() {
                     </td>
                     <td style={tdByCell}>
                       {(() => {
-                        const h = latestBy.get(e.merchant);
-                        if (!h) return <span style={dash}>—</span>;
+                        const authors = authorsByKey.get(e.merchant);
+                        if (!authors || authors.length === 0)
+                          return <span style={dash}>—</span>;
                         return (
-                          <span style={byCell}>
-                            <b>{h.by || "익명"}</b>
-                            <span style={byDate}>{fmtAt(h.at)}</span>
+                          <span style={byList}>
+                            {authors.map((a) => (
+                              <span key={a.by} style={byCell}>
+                                <b>{a.by}</b>
+                                <span style={byDate}>{fmtAt(a.at)}</span>
+                              </span>
+                            ))}
                           </span>
                         );
                       })()}
@@ -841,6 +852,12 @@ const byCell: CSSProperties = {
   alignItems: "center",
 };
 const byDate: CSSProperties = { fontSize: 11, color: "#9aa1a9" };
+const byList: CSSProperties = {
+  display: "flex",
+  flexDirection: "column",
+  gap: 6,
+  alignItems: "center",
+};
 const wrap: CSSProperties = {
   minHeight: "100vh",
   background: "#f4f5f7",

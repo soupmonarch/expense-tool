@@ -1128,6 +1128,9 @@ export default function Home() {
           >
             📖 사용 설명서
           </a>
+          <a href="/changelog" style={navBtn}>
+            🆕 업데이트 이력
+          </a>
         </div>
         <div style={bugBox}>
           <div style={bugTitle}>🐞 버그·오류 제보</div>
