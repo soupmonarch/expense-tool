@@ -4,6 +4,8 @@ node_modules
 .env.local
 .claude/settings.local.json
 next-env.d.ts
+# 분석용으로 폴더에 넣어 둔 영수증 등 개인 PDF (public/manual.pdf 는 제외)
+/*.pdf
 *.tsbuildinfo
 *.log
 .DS_Store

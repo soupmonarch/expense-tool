@@ -1429,7 +1429,9 @@ export default function Home() {
                     : ""}
                 </div>
                 {hasReceipts && receiptLoading && (
-                  <div style={mutedText}>🧾 영수증 PDF 분석 중… 잠시만요</div>
+                  <div style={mutedText}>
+                    🧾 {progress || "영수증 PDF 분석 중… 잠시만요"}
+                  </div>
                 )}
                 {hasReceipts && receiptMatch && (
                   <div>

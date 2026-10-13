@@ -1,6 +1,6 @@
 {
   "name": "expense-claim-tool",
-  "version": "2.4.0",
+  "version": "2.5.0",
   "private": true,
   "description": "Card statement -> Expense & Travel claim form generator (rule-first + AI + shared learning)",
   "scripts": {
@@ -9,16 +9,17 @@
     "start": "next start"
   },
   "dependencies": {
+    "@vercel/kv": "^2.0.0",
+    "exceljs": "4.4.0",
+    "jszip": "3.10.1",
     "next": "^14.2.32",
+    "openai": "4.56.0",
+    "pdf-lib": "1.17.1",
     "react": "18.3.1",
     "react-dom": "18.3.1",
-    "exceljs": "4.4.0",
-    "xlsx": "0.18.5",
-    "jszip": "3.10.1",
-    "pdf-lib": "1.17.1",
+    "tesseract.js": "^5.1.1",
     "unpdf": "0.11.0",
-    "openai": "4.56.0",
-    "@vercel/kv": "^2.0.0"
+    "xlsx": "0.18.5"
   },
   "devDependencies": {
     "@types/node": "20.14.10",

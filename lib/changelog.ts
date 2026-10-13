@@ -10,6 +10,15 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.5.0",
+    date: "2026-10-13",
+    changes: [
+      "🧾 글자가 없는 영수증 PDF도 인식 — 'Microsoft Print to PDF'·스캔으로 만든 매출전표를 글자 인식(OCR)으로 읽어요 (직원 컴퓨터 안에서만 처리)",
+      "해외 결제 매출전표(원화·외화 두 줄, 가맹점명 두 줄)도 읽기",
+      "통계 영수증 인식 기록에 OCR 사용 여부 표시",
+    ],
+  },
+  {
     version: "2.4.0",
     date: "2026-10-13",
     changes: [

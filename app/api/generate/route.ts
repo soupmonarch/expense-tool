@@ -98,6 +98,7 @@ function cleanReceiptStat(raw: unknown): ReceiptStat | undefined {
   };
   if (o.textItems !== undefined && o.textItems !== null)
     stat.textItems = n(o.textItems);
+  if (o.ocrPages) stat.ocrPages = n(o.ocrPages);
   if (typeof o.error === "string" && o.error) stat.error = o.error.slice(0, 160);
   return stat;
 }

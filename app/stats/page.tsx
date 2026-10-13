@@ -20,17 +20,20 @@ interface ReceiptJob {
   missing: number;
   leftover: number;
   textItems?: number;
+  ocrPages?: number;
   error?: string;
 }
 
 // 영수증 인식 결과를 한 줄 원인으로 설명한다.
 function receiptDiagnosis(j: ReceiptJob): { ok: boolean; text: string } {
-  if (j.error) return { ok: false, text: `PDF를 읽지 못함 — ${j.error}` };
+  const ocr = j.ocrPages ? ` (글자 인식 OCR ${j.ocrPages}쪽)` : "";
+  if (j.error && j.recognized === 0)
+    return { ok: false, text: `PDF를 읽지 못함 — ${j.error}` };
   if (j.recognized === 0) {
     if (j.textItems === 0)
       return {
         ok: false,
-        text: "PDF에 글자가 없음 — 스캔·사진으로 만든 PDF로 보여요",
+        text: "PDF에 글자가 없음 — 스캔·사진으로 만든 PDF로 보여요" + ocr,
       };
     return {
       ok: false,
@@ -44,9 +47,9 @@ function receiptDiagnosis(j: ReceiptJob): { ok: boolean; text: string } {
       ok: false,
       text: `영수증을 못 찾은 항목 ${j.missing}건${
         j.leftover ? ` · 남는 영수증 ${j.leftover}장` : ""
-      }`,
+      }${ocr}`,
     };
-  return { ok: true, text: "모두 매칭됨" };
+  return { ok: true, text: "모두 매칭됨" + ocr };
 }
 
 function fmtAt(iso: string): string {

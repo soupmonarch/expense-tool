@@ -45,6 +45,7 @@ export interface ParsedReceipts {
   pageCount: number;
   error?: string;
   sample?: string; // 진단용: 인식 0건일 때 텍스트 추출 상태를 리포트에 남긴다
+  ocrPages?: number; // 글자가 없어 브라우저 OCR 로 읽은 페이지 수
 }
 
 // 숫자만 남기고 선행 0 제거 → 승인번호 비교 키
@@ -108,6 +109,96 @@ function extractFields(joined: string): {
     /(신용취소|매입취소|승인취소|취소승인|매출취소|환불)/.test(joined);
 
   return { approval, merchant, amount, date, time, canceled };
+}
+
+// ---------------------------------------------------------------------------
+// OCR 텍스트용 추출. "Microsoft Print to PDF" 로 만든 PDF는 글자가 그림(선)으로
+// 바뀌어 텍스트가 없으므로, 브라우저에서 OCR(Tesseract)로 읽은 텍스트를 여기서
+// 해석한다. OCR 은 작은 영문 라벨을 자주 틀리고(예: "(Date Time)" → "(280ㅇ106)",
+// "거래금액" → "거래급액"/깨짐), 해외 결제는 값이 두 줄(원화/외화, 가맹점명)로
+// 나뉘므로 줄 단위 + 구간 기반으로 읽는다.
+// ---------------------------------------------------------------------------
+const OCR_LABEL_HINT =
+  /(카드종류|거래일시|카드번호|승인번호|결제방법|거래유형|거래[금급]액|부가세|봉사료|가맹점|대표자|사업자|전화번호|주소|CASHBACK|VAT|Card|Date)/i;
+
+export function extractFieldsFromOcr(text: string): {
+  approval: string;
+  merchant: string;
+  amount: number;
+  date?: string;
+  time?: string;
+  canceled: boolean;
+  hasContent: boolean;
+} {
+  const lines = String(text || "")
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean);
+  const compact = (s: string) => s.replace(/\s+/g, "");
+  const find = (re: RegExp, from = 0) => {
+    for (let i = from; i < lines.length; i++) if (re.test(compact(lines[i]))) return i;
+    return -1;
+  };
+  const joined = compact(lines.join(""));
+  const hasContent = /(매출전표|승인번호|가맹점)/.test(joined);
+
+  // 승인번호: 라벨 뒤 6~12자리 숫자
+  let approval = "";
+  const ai = find(/승인번호/);
+  if (ai >= 0) {
+    const m = compact(lines[ai]).match(/승인번호\D*(\d{6,12})/);
+    if (m) approval = approvalKey(m[1]);
+  }
+
+  // 거래일시: 라벨이 깨져도 "YYYY.MM.DD HH:mm" 모양은 잘 읽힌다 → 전체에서 첫 일시
+  let date: string | undefined;
+  let time: string | undefined;
+  const dm = lines
+    .join("\n")
+    .match(/(20\d{2})[.\-/](\d{1,2})[.\-/](\d{1,2})\s*(\d{1,2}):(\d{2})/);
+  if (dm) {
+    date = `${dm[1]}.${dm[2].padStart(2, "0")}.${dm[3].padStart(2, "0")}`;
+    time = `${dm[4].padStart(2, "0")}:${dm[5]}`;
+  }
+
+  // 거래금액: '거래유형' 줄과 '부가세/VAT/봉사료' 줄 사이에서 처음 나오는 "숫자 원".
+  // (라벨이 깨지거나 원화 금액이 라벨 윗줄에 있는 해외 결제도 이 구간 안에 있다)
+  const KRW = /(-?)\s*(\d{1,3}(?:,\d{3})+|\d+)\s*원/;
+  let amount = 0;
+  let negative = false;
+  const ti = find(/거래유형/);
+  const start = ti >= 0 ? ti + 1 : ai >= 0 ? ai + 1 : 0;
+  let end = find(/(부가세|VAT|봉사료|CASHBACK)/i, start);
+  if (end < 0) end = lines.length;
+  for (let i = start; i < end && !amount; i++) {
+    if (/USD|EUR|JPY|CNY/i.test(lines[i])) continue;
+    const m = lines[i].match(KRW);
+    if (m) {
+      amount = Math.abs(num(m[2]));
+      negative = m[1] === "-";
+    }
+  }
+
+  // 가맹점명: 라벨 뒤 값. 해외 결제처럼 이름 앞부분이 윗줄로 넘어간 경우 합친다.
+  let merchant = "";
+  const mi = find(/가맹점명/);
+  if (mi >= 0) {
+    merchant = lines[mi].replace(/^.*?가\s*맹\s*점\s*명/, "").trim();
+    const prev = mi > 0 ? lines[mi - 1] : "";
+    if (
+      prev &&
+      !OCR_LABEL_HINT.test(prev) &&
+      !/(원|USD|KRW|\d{1,3},\d{3})/.test(prev) &&
+      /[A-Za-z가-힣]/.test(prev)
+    ) {
+      merchant = (prev + " " + merchant).trim();
+    }
+  }
+
+  const typeLine = ti >= 0 ? lines[ti] : "";
+  const canceled = negative || /(취소|환불)/.test(typeLine);
+
+  return { approval, merchant, amount, date, time, canceled, hasContent };
 }
 
 // ---------------------------------------------------------------------------

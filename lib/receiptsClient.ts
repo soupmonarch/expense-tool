@@ -125,6 +125,7 @@ export async function parseReceiptsRemote(
   let pageCount = 0;
   const errors: string[] = [];
   let sample: string | undefined;
+  const ocrTargets: number[] = [];
 
   for (let ci = 0; ci < chunks.length; ci++) {
     const c = chunks[ci];
@@ -152,8 +153,26 @@ export async function parseReceiptsRemote(
     for (const r of parsed.receipts || []) {
       receipts.push({ ...r, page: r.page + c.pageStart });
     }
-    pageCount += parsed.pageCount || 0;
+    const chunkPages = parsed.pageCount || 0;
+    // 글자를 하나도 못 읽은 조각(스캔·"Microsoft Print to PDF" 등)은 OCR 대상으로 모은다.
+    if ((parsed.receipts || []).length === 0 && !parsed.error) {
+      for (let i = 0; i < chunkPages; i++) ocrTargets.push(c.pageStart + i);
+    }
+    pageCount += chunkPages;
     if (!sample && parsed.sample) sample = parsed.sample;
+  }
+
+  // 글자가 없는 페이지는 브라우저에서 OCR 로 읽는다(실패해도 나머지 결과는 유지).
+  let ocrPages = 0;
+  if (ocrTargets.length > 0) {
+    try {
+      const { ocrReceiptPages } = await import("./ocrReceipts");
+      const found = await ocrReceiptPages(bytes, ocrTargets, onProgress);
+      receipts.push(...found);
+      ocrPages = ocrTargets.length;
+    } catch (e: any) {
+      errors.push("글자 인식(OCR) 실패: " + (e?.message || e));
+    }
   }
 
   return {
@@ -161,6 +180,7 @@ export async function parseReceiptsRemote(
     pageCount,
     error: errors.length ? errors.join(" / ") : undefined,
     sample: receipts.length === 0 ? sample : undefined,
+    ...(ocrPages ? { ocrPages } : {}),
   };
 }
 
@@ -207,6 +227,7 @@ export interface ReceiptStatClient {
   missing: number;
   leftover: number;
   textItems?: number; // 인식 0건일 때 PDF에서 읽힌 글자 조각 수
+  ocrPages?: number; // OCR 로 읽은 페이지 수
   error?: string;
 }
 
@@ -218,6 +239,7 @@ export function receiptStats(
     pages: parsed.pageCount || 0,
     recognized: parsed.receipts.length,
     ...(parsed.error ? { error: parsed.error } : {}),
+    ...(parsed.ocrPages ? { ocrPages: parsed.ocrPages } : {}),
   };
   if (parsed.receipts.length === 0) {
     // 진단 문구 "[진단] 추출 텍스트조각 N개, ..." 에서 숫자만 꺼낸다.
@@ -260,6 +282,10 @@ export async function attachReceiptsToZip(
       ", 인식된 영수증: " +
       parsed.receipts.length,
   );
+  if (parsed.ocrPages)
+    reportLines.push(
+      "글자가 없는 PDF여서 글자 인식(OCR)으로 읽은 페이지: " + parsed.ocrPages,
+    );
   if (parsed.sample) reportLines.push("", parsed.sample);
 
   if (parsed.receipts.length === 0) {

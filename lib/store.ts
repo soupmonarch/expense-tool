@@ -221,6 +221,7 @@ export interface ReceiptStat {
   missing: number; // 영수증을 못 찾은 엑셀 행 수
   leftover: number; // 어느 행에도 맞지 않은 영수증 수
   textItems?: number; // 인식 0건일 때 PDF에서 읽힌 글자 조각 수 (0이면 스캔/이미지 PDF)
+  ocrPages?: number; // 글자가 없어 브라우저 OCR 로 읽은 페이지 수
   error?: string; // 파싱 오류 메시지
 }
 
