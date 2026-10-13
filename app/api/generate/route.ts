@@ -9,7 +9,13 @@ import {
   type Category,
 } from "@/lib/categories";
 import { parseReceiptPdf } from "@/lib/parseReceipts";
-import { saveUsage } from "@/lib/store";
+import { createHash } from "crypto";
+import {
+  saveUsage,
+  savePayments,
+  type PaymentRecord,
+  type ReceiptStat,
+} from "@/lib/store";
 import {
   matchReceipts,
   renderReceiptPdf,
@@ -49,29 +55,83 @@ function sourceBucket(source?: string): string {
   return "manual";
 }
 
+// 한국 시각(KST) 기준 YYYY-MM
+function kstMonth(d: Date): string {
+  return new Date(d.getTime() + 9 * 3600 * 1000).toISOString().slice(0, 7);
+}
+
+// 결제일("2026.09.03", "2026-09-03 18:30" 등)에서 YYYY-MM. 못 읽으면 null.
+function paymentMonth(date?: string): string | null {
+  const m = String(date || "").match(/(20\d{2})\s*[.\-/년]\s*(\d{1,2})/);
+  if (!m) return null;
+  const mm = Number(m[2]);
+  return mm >= 1 && mm <= 12 ? `${m[1]}-${String(mm).padStart(2, "0")}` : null;
+}
+
+// 같은 결제를 알아보는 지문. 승인번호가 있으면 승인번호+금액, 없으면
+// 가맹점+결제일+금액(중복 제거 규칙과 동일). 원문 대신 해시만 저장한다.
+function paymentKey(r: IncomingRow, batchId: string, index: number): string {
+  const amt = Math.round(Number(r.amount) || 0);
+  const appr = String(r.approval || "")
+    .replace(/[^0-9]/g, "")
+    .replace(/^0+/, "");
+  const merchant = (r.merchant || "").trim();
+  const basis = appr
+    ? `a:${appr}|${amt}`
+    : merchant && r.date
+      ? `m:${merchant}|${r.date}|${amt}`
+      : `b:${batchId}|${index}`;
+  return createHash("sha256").update(basis).digest("hex").slice(0, 24);
+}
+
+// 영수증 인식 결과(브라우저가 보낸 값)를 숫자/짧은 문자열로만 정리한다.
+function cleanReceiptStat(raw: unknown): ReceiptStat | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const o = raw as Record<string, unknown>;
+  const n = (v: unknown) => Math.max(0, Math.round(Number(v) || 0));
+  const stat: ReceiptStat = {
+    pages: n(o.pages),
+    recognized: n(o.recognized),
+    matched: n(o.matched),
+    missing: n(o.missing),
+    leftover: n(o.leftover),
+  };
+  if (o.textItems !== undefined && o.textItems !== null)
+    stat.textItems = n(o.textItems);
+  if (typeof o.error === "string" && o.error) stat.error = o.error.slice(0, 160);
+  return stat;
+}
+
 // 사용 통계 저장(실패해도 다운로드는 계속).
-async function recordUsage(batchId: string, rows: IncomingRow[]) {
+async function recordUsage(
+  batchId: string,
+  rows: IncomingRow[],
+  receipt?: ReceiptStat,
+) {
   try {
     const valid = new Set<string>(ALL_CATEGORIES);
-    const byCategory: Record<string, { n: number; amount: number }> = {};
-    const bySource: Record<string, number> = {};
+    const now = new Date();
+    const fallbackMonth = kstMonth(now);
+    const payments: Record<string, PaymentRecord> = {};
     let amount = 0;
-    for (const r of rows) {
+    rows.forEach((r, i) => {
       const a = Number(r.amount) || 0;
-      const cat = r.category && valid.has(r.category) ? r.category : UNCLASSIFIED;
       amount += a;
-      byCategory[cat] = byCategory[cat] || { n: 0, amount: 0 };
-      byCategory[cat].n++;
-      byCategory[cat].amount += a;
-      const b = sourceBucket(r.source);
-      bySource[b] = (bySource[b] || 0) + 1;
-    }
+      payments[paymentKey(r, batchId, i)] = {
+        m: paymentMonth(r.date) || fallbackMonth,
+        a,
+        c: r.category && valid.has(r.category) ? r.category : UNCLASSIFIED,
+        s: sourceBucket(r.source),
+        t: now.toISOString(),
+      };
+    });
+    await savePayments(payments);
     await saveUsage(batchId, {
-      at: new Date().toISOString(),
+      v: 2,
+      at: now.toISOString(),
       rows: rows.length,
       amount,
-      byCategory,
-      bySource,
+      ...(receipt ? { receipt } : {}),
     });
   } catch (e) {
     console.error("usage record failed:", e);
@@ -85,6 +145,7 @@ export async function POST(req: NextRequest) {
   try {
     let rows: IncomingRow[] = [];
     let batchId = "";
+    let receiptStat: ReceiptStat | undefined;
     let receiptBytes: Uint8Array | null = null;
 
     const ctype = req.headers.get("content-type") || "";
@@ -106,16 +167,18 @@ export async function POST(req: NextRequest) {
       const body = (await req.json()) as {
         rows?: IncomingRow[];
         batchId?: string;
+        receipt?: unknown;
       };
       rows = Array.isArray(body.rows) ? body.rows : [];
       batchId = typeof body.batchId === "string" ? body.batchId : "";
+      receiptStat = cleanReceiptStat(body.receipt);
     }
 
     if (!Array.isArray(rows) || rows.length === 0) {
       return NextResponse.json({ error: "No rows provided" }, { status: 400 });
     }
 
-    if (batchId) await recordUsage(batchId, rows);
+    if (batchId) await recordUsage(batchId, rows, receiptStat);
 
     const valid = new Set<string>(ALL_CATEGORIES);
     const expenseRows: FormRow[] = [];

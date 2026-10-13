@@ -1,4 +1,4 @@
-import { kv } from "@vercel/kv";
+import { createClient } from "@vercel/kv";
 import { normalizeMerchant } from "./normalize";
 import { canonCategory } from "./categories";
 
@@ -12,6 +12,25 @@ export { normalizeMerchant };
 // it auto-injects KV_REST_API_URL / KV_REST_API_TOKEN. Without those env vars
 // we fall back to an in-memory map so the app still runs (but learning resets
 // on each cold start / is per-instance only).
+
+// KV 클라이언트. @vercel/kv 기본 클라이언트는 fetch 를 cache: "default" 로 보내서
+// Next.js 가 GET 응답(예: /api/stats)을 최대 1년간 저장해 두고 옛 값을 돌려주는
+// 문제가 있었다. 항상 최신 값을 읽도록 "no-store" 로 직접 만든다.
+// (환경변수가 있을 때 처음 쓰는 순간 만든다 — kvEnabled() 로 먼저 확인)
+let _kv: ReturnType<typeof createClient> | null = null;
+const kv = new Proxy({} as ReturnType<typeof createClient>, {
+  get(_target, prop) {
+    if (!_kv) {
+      _kv = createClient({
+        url: process.env.KV_REST_API_URL as string,
+        token: process.env.KV_REST_API_TOKEN as string,
+        cache: "no-store",
+      });
+    }
+    const value = (_kv as any)[prop];
+    return typeof value === "function" ? value.bind(_kv) : value;
+  },
+});
 
 const HASH = "expense_merchant_categories";
 const memory = new Map<string, string>();
@@ -178,19 +197,82 @@ export async function appendHistory(
 }
 
 // ---------------------------------------------------------------------------
-// 사용 통계: 엑셀을 다운로드할 때마다 그 작업(batch)의 요약(건수·금액·분류별·
-// 분류 방식별)을 저장한다. 같은 작업을 여러 번 다운로드해도 batchId 가 같아
-// 덮어쓰므로 중복 집계되지 않는다. 가맹점명·사람 이름은 저장하지 않는다.
+// 사용 통계 (두 가지를 저장한다. 가맹점명·사람 이름·승인번호 원문은 저장하지 않는다)
+//
+//  1) 작업(batch) 요약 — USAGE_HASH, 키 = batchId
+//     다운로드할 때마다 그 작업의 건수·금액과 영수증 인식 결과를 남긴다.
+//     같은 작업을 여러 번 다운로드하면 덮어쓴다. "다운로드한 작업 수"와
+//     "영수증 인식" 통계에 쓴다.
+//     v 가 없는 항목은 v2.4.0 이전 형식(분류별 합계 포함, 다운로드 월 기준)이다.
+//
+//  2) 결제 1건씩 — PAYMENT_HASH, 키 = 결제 지문(승인번호+금액의 해시)
+//     같은 카드 내역을 다시 올려 분류해도 같은 결제는 같은 키라 덮어쓰므로
+//     금액이 두 번 집계되지 않는다. 월은 결제일 기준이다.
 // ---------------------------------------------------------------------------
 const USAGE_HASH = "expense_usage_stats";
 const usageMemory = new Map<string, UsageSummary>();
+const PAYMENT_HASH = "expense_usage_payments";
+const paymentMemory = new Map<string, PaymentRecord>();
+
+export interface ReceiptStat {
+  pages: number; // 영수증 PDF 페이지 수
+  recognized: number; // 인식된 영수증 수
+  matched: number; // 영수증을 찾은 엑셀 행 수
+  missing: number; // 영수증을 못 찾은 엑셀 행 수
+  leftover: number; // 어느 행에도 맞지 않은 영수증 수
+  textItems?: number; // 인식 0건일 때 PDF에서 읽힌 글자 조각 수 (0이면 스캔/이미지 PDF)
+  error?: string; // 파싱 오류 메시지
+}
 
 export interface UsageSummary {
+  v?: number; // 2 = v2.4.0 이후 형식
   at: string; // ISO 타임스탬프 (다운로드 시각)
   rows: number;
   amount: number;
-  byCategory: Record<string, { n: number; amount: number }>;
-  bySource: Record<string, number>; // learned | rule | ai | manual
+  receipt?: ReceiptStat;
+  // 아래 둘은 v2.4.0 이전 형식에만 있다 (이후로는 PAYMENT_HASH 에서 집계).
+  byCategory?: Record<string, { n: number; amount: number }>;
+  bySource?: Record<string, number>; // learned | rule | ai | manual
+}
+
+export interface PaymentRecord {
+  m: string; // 결제 월 YYYY-MM
+  a: number; // 금액(원)
+  c: string; // 분류
+  s: string; // 분류 방식: learned | rule | ai | manual
+  t: string; // 마지막으로 다운로드한 시각 (ISO)
+}
+
+export async function savePayments(
+  records: Record<string, PaymentRecord>,
+): Promise<void> {
+  const entries = Object.entries(records);
+  if (entries.length === 0) return;
+  if (kvEnabled()) {
+    try {
+      const payload: Record<string, string> = {};
+      for (const [k, v] of entries) payload[k] = JSON.stringify(v);
+      await kv.hset(PAYMENT_HASH, payload);
+      return;
+    } catch (e) {
+      console.error("KV payment write failed, using memory:", e);
+    }
+  }
+  for (const [k, v] of entries) paymentMemory.set(k, v);
+}
+
+export async function getAllPayments(): Promise<PaymentRecord[]> {
+  if (kvEnabled()) {
+    try {
+      const map = await kv.hgetall<Record<string, unknown>>(PAYMENT_HASH);
+      return Object.values(map || {})
+        .map((v) => (typeof v === "string" ? JSON.parse(v) : v))
+        .filter(Boolean) as PaymentRecord[];
+    } catch (e) {
+      console.error("KV payment read failed, using memory:", e);
+    }
+  }
+  return [...paymentMemory.values()];
 }
 
 export async function saveUsage(

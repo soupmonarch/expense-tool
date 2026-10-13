@@ -11,6 +11,56 @@ interface MonthStats {
   bySource: Record<string, number>;
 }
 
+interface ReceiptJob {
+  at: string;
+  rows: number;
+  pages: number;
+  recognized: number;
+  matched: number;
+  missing: number;
+  leftover: number;
+  textItems?: number;
+  error?: string;
+}
+
+// 영수증 인식 결과를 한 줄 원인으로 설명한다.
+function receiptDiagnosis(j: ReceiptJob): { ok: boolean; text: string } {
+  if (j.error) return { ok: false, text: `PDF를 읽지 못함 — ${j.error}` };
+  if (j.recognized === 0) {
+    if (j.textItems === 0)
+      return {
+        ok: false,
+        text: "PDF에 글자가 없음 — 스캔·사진으로 만든 PDF로 보여요",
+      };
+    return {
+      ok: false,
+      text: `글자는 있지만 영수증 양식을 알아보지 못함${
+        j.textItems ? ` (글자 조각 ${j.textItems}개)` : ""
+      } — 새 양식일 수 있어요`,
+    };
+  }
+  if (j.missing > 0)
+    return {
+      ok: false,
+      text: `영수증을 못 찾은 항목 ${j.missing}건${
+        j.leftover ? ` · 남는 영수증 ${j.leftover}장` : ""
+      }`,
+    };
+  return { ok: true, text: "모두 매칭됨" };
+}
+
+function fmtAt(iso: string): string {
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return iso;
+  return d.toLocaleString("ko-KR", {
+    timeZone: "Asia/Seoul",
+    month: "numeric",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
 interface HistoryItem {
   key: string;
   by: string;
@@ -79,6 +129,7 @@ function BarRow(props: {
 
 export default function StatsPage() {
   const [months, setMonths] = useState<MonthStats[]>([]);
+  const [receiptJobs, setReceiptJobs] = useState<ReceiptJob[]>([]);
   const [learnedCount, setLearnedCount] = useState(0);
   const [gatewayCount, setGatewayCount] = useState(0);
   const [history, setHistory] = useState<HistoryItem[]>([]);
@@ -98,6 +149,7 @@ export default function StatsPage() {
         const l = await lRes.json();
         if (!sRes.ok) throw new Error(s?.error || "통계 불러오기 실패");
         setMonths(s.months || []);
+        setReceiptJobs(s.receiptJobs || []);
         setPersistent(!!s.persistent);
         if (lRes.ok) {
           setLearnedCount(l.count || 0);
@@ -171,6 +223,23 @@ export default function StatsPage() {
     };
   }, [history, period]);
 
+  // 영수증 인식: 선택 기간(다운로드 월 기준)의 작업
+  const receiptSel = useMemo(() => {
+    const list = period
+      ? receiptJobs.filter((j) => monthOf(j.at) === period)
+      : receiptJobs;
+    const rows = list.reduce((t, j) => t + j.rows, 0);
+    const matched = list.reduce((t, j) => t + j.matched, 0);
+    return {
+      list,
+      jobs: list.length,
+      recognized: list.reduce((t, j) => t + j.recognized, 0),
+      pages: list.reduce((t, j) => t + j.pages, 0),
+      matchPct: rows > 0 ? (matched / rows) * 100 : 0,
+      failed: list.filter((j) => !receiptDiagnosis(j).ok).length,
+    };
+  }, [receiptJobs, period]);
+
   const recentMonths = months.slice(0, 12);
   const maxMonthAmount = Math.max(0, ...recentMonths.map((m) => m.amount));
   const maxCatAmount = Math.max(0, ...categoryRows.map(([, v]) => v.amount));
@@ -190,9 +259,9 @@ export default function StatsPage() {
         </a>
         <h1 style={title}>📊 사용 통계</h1>
         <p style={subtitle}>
-          엑셀을 다운로드한 작업을 기준으로 집계해요 (같은 작업을 여러 번
-          받아도 한 번만 셉니다). 금액은 원화 기준이고, 개인별 내역은 따로
-          저장하지 않아요.
+          엑셀을 다운로드할 때 집계해요. 금액은 <b>결제일 기준</b>이고, 같은
+          카드 내역을 다시 올려도 <b>같은 결제는 한 번만</b> 세요. 금액은
+          원화 기준이며 가맹점명·개인별 내역은 저장하지 않아요.
         </p>
 
         {!persistent && (
@@ -251,7 +320,9 @@ export default function StatsPage() {
               <>
                 <section style={section}>
                   <h2 style={h2}>월별 사용액</h2>
-                  <p style={hint}>최근 12개월 · 막대에 마우스를 올리면 자세히 보여요</p>
+                  <p style={hint}>
+                    결제일 기준 · 최근 12개월 · 막대에 마우스를 올리면 자세히 보여요
+                  </p>
                   {recentMonths.map((m) => (
                     <BarRow
                       key={m.month}
@@ -312,6 +383,75 @@ export default function StatsPage() {
                 </section>
               </>
             )}
+
+            <section style={section}>
+              <h2 style={h2}>🧾 영수증 인식</h2>
+              <p style={hint}>
+                영수증 PDF를 함께 올린 작업 ·{" "}
+                {period ? monthLabel(period) : "전체 기간"} (다운로드한 날 기준)
+              </p>
+              {receiptSel.jobs === 0 ? (
+                <p style={muted}>
+                  아직 기록이 없어요. v2.4.0 업데이트 이후 영수증 PDF와 함께
+                  다운로드한 작업부터 기록돼요.
+                </p>
+              ) : (
+                <>
+                  <div style={tiles}>
+                    <div style={tile}>
+                      <div style={tileN}>{fmt(receiptSel.jobs)}</div>
+                      <div style={tileL}>영수증 첨부 작업</div>
+                    </div>
+                    <div style={tile}>
+                      <div style={tileN}>{fmt(receiptSel.recognized)}</div>
+                      <div style={tileL}>
+                        인식한 영수증 ({fmt(receiptSel.pages)}페이지)
+                      </div>
+                    </div>
+                    <div style={tile}>
+                      <div style={tileN}>{receiptSel.matchPct.toFixed(0)}%</div>
+                      <div style={tileL}>영수증 매칭률</div>
+                    </div>
+                    <div style={tile}>
+                      <div style={tileN}>{fmt(receiptSel.failed)}</div>
+                      <div style={tileL}>문제 있었던 작업</div>
+                    </div>
+                  </div>
+                  <table style={jobTable}>
+                    <thead>
+                      <tr>
+                        <th style={jobTh}>일시</th>
+                        <th style={jobThR}>엑셀 행</th>
+                        <th style={jobThR}>인식 / 페이지</th>
+                        <th style={jobThR}>매칭</th>
+                        <th style={jobTh}>결과</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {receiptSel.list.slice(0, 30).map((j) => {
+                        const d = receiptDiagnosis(j);
+                        return (
+                          <tr key={j.at}>
+                            <td style={jobTd}>{fmtAt(j.at)}</td>
+                            <td style={jobTdR}>{fmt(j.rows)}</td>
+                            <td style={jobTdR}>
+                              {fmt(j.recognized)} / {fmt(j.pages)}
+                            </td>
+                            <td style={jobTdR}>
+                              {fmt(j.matched)}/{fmt(j.rows)}
+                            </td>
+                            <td style={d.ok ? jobOk : jobBad}>
+                              {d.ok ? "✅ " : "⚠️ "}
+                              {d.text}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </>
+              )}
+            </section>
 
             <section style={section}>
               <h2 style={h2}>학습 데이터 현황</h2>
@@ -434,6 +574,38 @@ const hint: CSSProperties = {
   fontSize: 12,
   color: "#8a9099",
   margin: "0 0 10px",
+};
+const jobTable: CSSProperties = {
+  width: "100%",
+  borderCollapse: "collapse",
+  fontSize: 12.5,
+  marginTop: 4,
+};
+const jobTh: CSSProperties = {
+  textAlign: "left",
+  padding: "6px 8px",
+  borderBottom: "2px solid #e6e8eb",
+  color: "#5f6873",
+  fontWeight: 600,
+  whiteSpace: "nowrap",
+};
+const jobThR: CSSProperties = { ...jobTh, textAlign: "right" };
+const jobTd: CSSProperties = {
+  padding: "6px 8px",
+  borderBottom: "1px solid #eef0f3",
+  color: "#3a4149",
+  whiteSpace: "nowrap",
+};
+const jobTdR: CSSProperties = {
+  ...jobTd,
+  textAlign: "right",
+  fontVariantNumeric: "tabular-nums",
+};
+const jobOk: CSSProperties = { ...jobTd, color: "#1e874b", whiteSpace: "normal" };
+const jobBad: CSSProperties = {
+  ...jobTd,
+  color: "#c0392b",
+  whiteSpace: "normal",
 };
 const barRow: CSSProperties = {
   display: "grid",

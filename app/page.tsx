@@ -23,6 +23,7 @@ import {
   mergePdfFiles,
   parseReceiptsRemote,
   readJsonSafe,
+  receiptStats,
 } from "@/lib/receiptsClient";
 import type { ParsedReceipts } from "@/lib/parseReceipts";
 import { matchReceipts, type RowMeta } from "@/lib/buildReceiptPdf";
@@ -639,13 +640,18 @@ export default function Home() {
     setDone(false);
     try {
       const payload = finalizeRows();
+      // 영수증이 있으면 먼저 분석해(대개 최종 검토에서 이미 끝나 있음) 인식 결과를
+      // 사용 통계에 함께 남긴다. 숫자만 보내고 영수증 내용은 보내지 않는다.
+      const hasReceiptFiles = mode !== "excel" && receiptFiles.length > 0;
+      const rc = hasReceiptFiles ? await ensureReceiptsParsed() : null;
+      const receipt = rc ? receiptStats(payload, rc.parsed) : undefined;
       setProgress("엑셀 양식 생성 중…");
       // 영수증 PDF는 서버로 올리지 않고(4.5MB 한도) 브라우저에서 직접
       // 잘라 정렬한 뒤, 서버가 만든 엑셀 ZIP 에 합친다.
       const res = await fetch("/api/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ rows: payload, batchId }),
+        body: JSON.stringify({ rows: payload, batchId, receipt }),
       });
       if (!res.ok) {
         let msg = `Failed (${res.status})`;
@@ -658,8 +664,7 @@ export default function Home() {
         throw new Error(msg);
       }
       let blob = await res.blob();
-      if (mode !== "excel" && receiptFiles.length > 0) {
-        const rc = await ensureReceiptsParsed();
+      if (rc) {
         setProgress("영수증 PDF 자르기·정렬 중…");
         blob = await attachReceiptsToZip(blob, payload, rc.bytes, rc.parsed);
       }

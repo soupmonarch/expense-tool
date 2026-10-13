@@ -171,14 +171,12 @@ export interface ClaimRowLike {
   cancel?: { amount: number };
 }
 
-// 서버가 만든 엑셀 ZIP 에 영수증 PDF 2개(Expense/Travel, 엑셀 행 순서와 동일)와
-// 리포트를 추가한다. 행 분리 규칙은 /api/generate 와 정확히 같다.
-export async function attachReceiptsToZip(
-  zipBlob: Blob,
-  rows: ClaimRowLike[],
-  srcBytes: Uint8Array,
-  parsed: ParsedReceipts,
-): Promise<Blob> {
+// 엑셀 행을 Expense / Travel 영수증 매칭용 정보로 나눈다.
+// 행 분리 규칙은 /api/generate 와 정확히 같다.
+function splitRowMeta(rows: ClaimRowLike[]): {
+  expenseMeta: RowMeta[];
+  travelMeta: RowMeta[];
+} {
   const valid = new Set<string>(ALL_CATEGORIES);
   const expenseMeta: RowMeta[] = [];
   const travelMeta: RowMeta[] = [];
@@ -198,6 +196,59 @@ export async function attachReceiptsToZip(
       expenseMeta.push(meta);
     }
   }
+  return { expenseMeta, travelMeta };
+}
+
+// 사용 통계용 영수증 인식 결과 (숫자만 — 영수증 내용은 담지 않는다).
+export interface ReceiptStatClient {
+  pages: number;
+  recognized: number;
+  matched: number;
+  missing: number;
+  leftover: number;
+  textItems?: number; // 인식 0건일 때 PDF에서 읽힌 글자 조각 수
+  error?: string;
+}
+
+export function receiptStats(
+  rows: ClaimRowLike[],
+  parsed: ParsedReceipts,
+): ReceiptStatClient {
+  const base = {
+    pages: parsed.pageCount || 0,
+    recognized: parsed.receipts.length,
+    ...(parsed.error ? { error: parsed.error } : {}),
+  };
+  if (parsed.receipts.length === 0) {
+    // 진단 문구 "[진단] 추출 텍스트조각 N개, ..." 에서 숫자만 꺼낸다.
+    const m = /텍스트조각\s*(\d+)/.exec(parsed.sample || "");
+    return {
+      ...base,
+      matched: 0,
+      missing: rows.length,
+      leftover: 0,
+      ...(m ? { textItems: Number(m[1]) } : {}),
+    };
+  }
+  const { expenseMeta, travelMeta } = splitRowMeta(rows);
+  const s = matchReceipts(expenseMeta, travelMeta, parsed.receipts);
+  return {
+    ...base,
+    matched: s.expense.matchedRows + s.travel.matchedRows,
+    missing: s.expense.missingRows + s.travel.missingRows,
+    leftover: s.leftover.length,
+  };
+}
+
+// 서버가 만든 엑셀 ZIP 에 영수증 PDF 2개(Expense/Travel, 엑셀 행 순서와 동일)와
+// 리포트를 추가한다.
+export async function attachReceiptsToZip(
+  zipBlob: Blob,
+  rows: ClaimRowLike[],
+  srcBytes: Uint8Array,
+  parsed: ParsedReceipts,
+): Promise<Blob> {
+  const { expenseMeta, travelMeta } = splitRowMeta(rows);
 
   const zip = await JSZip.loadAsync(zipBlob);
   const reportLines: string[] = [];
