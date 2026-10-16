@@ -222,6 +222,9 @@ export interface ReceiptStat {
   leftover: number; // 어느 행에도 맞지 않은 영수증 수
   textItems?: number; // 인식 0건일 때 PDF에서 읽힌 글자 조각 수 (0이면 스캔/이미지 PDF)
   ocrPages?: number; // 글자가 없어 브라우저 OCR 로 읽은 페이지 수
+  aiPages?: number; // AI 이미지 인식으로 새로 읽은 페이지 수
+  aiCachedPages?: number; // 저장된 AI 결과를 다시 쓴 페이지 수
+  aiTokens?: number; // AI 인식 토큰 수 (입력+출력)
   error?: string; // 파싱 오류 메시지
 }
 

@@ -46,6 +46,9 @@ export interface ParsedReceipts {
   error?: string;
   sample?: string; // 진단용: 인식 0건일 때 텍스트 추출 상태를 리포트에 남긴다
   ocrPages?: number; // 글자가 없어 브라우저 OCR 로 읽은 페이지 수
+  aiPages?: number; // AI 이미지 인식으로 읽은 페이지 수 (새로 호출한 것)
+  aiCachedPages?: number; // 저장된 AI 결과를 다시 쓴 페이지 수 (비용 0)
+  aiTokens?: number; // AI 인식에 쓴 토큰 수 (입력+출력)
 }
 
 // 숫자만 남기고 선행 0 제거 → 승인번호 비교 키

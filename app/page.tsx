@@ -126,6 +126,24 @@ export default function Home() {
   const [dragOver, setDragOver] = useState(false);
   const [receiptFiles, setReceiptFiles] = useState<File[]>([]);
   const [receiptDragOver, setReceiptDragOver] = useState(false);
+  // "AI로 영수증 읽기" 토글 (기본 꺼짐 = OCR). 브라우저에 기억한다.
+  const [aiReceipt, setAiReceipt] = useState(false);
+  useEffect(() => {
+    try {
+      setAiReceipt(localStorage.getItem("expense_tool_ai_receipt") === "1");
+    } catch {
+      /* ignore */
+    }
+  }, []);
+  function toggleAiReceipt(on: boolean) {
+    setAiReceipt(on);
+    try {
+      localStorage.setItem("expense_tool_ai_receipt", on ? "1" : "0");
+    } catch {
+      /* ignore */
+    }
+    resetResults();
+  }
   const [loading, setLoading] = useState(false);
   const [downloading, setDownloading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -337,16 +355,18 @@ export default function Home() {
   }
 
   async function ensureReceiptsParsed() {
-    const key = receiptFiles
-      .map((f) => `${f.name}:${f.size}:${f.lastModified}`)
-      .join("|");
+    const key =
+      (aiReceipt ? "ai|" : "ocr|") +
+      receiptFiles.map((f) => `${f.name}:${f.size}:${f.lastModified}`).join("|");
     if (receiptCache.current && receiptCache.current.key === key)
       return receiptCache.current;
     setProgress(
       receiptFiles.length > 1 ? "영수증 PDF 병합 중…" : "영수증 PDF 준비 중…",
     );
     const bytes = await mergePdfFiles(receiptFiles);
-    const parsed = await parseReceiptsRemote(bytes, setProgress);
+    const parsed = await parseReceiptsRemote(bytes, setProgress, {
+      useAi: aiReceipt,
+    });
     const entry = { key, bytes, parsed };
     receiptCache.current = entry;
     return entry;
@@ -1056,6 +1076,24 @@ export default function Home() {
                 ))}
               </div>
             )}
+            <label style={aiToggleRow}>
+              <input
+                type="checkbox"
+                checked={aiReceipt}
+                onChange={(e) => toggleAiReceipt(e.target.checked)}
+              />
+              <span>
+                <b>🤖 AI로 영수증 읽기</b>{" "}
+                <span style={aiToggleBadge}>{aiReceipt ? "켜짐" : "꺼짐 · OCR 사용"}</span>
+                <br />
+                <span style={aiToggleHint}>
+                  글자가 없는 영수증 PDF(스캔·인쇄 PDF)를 OCR 대신 AI가 읽어요.
+                  처음 보는 양식도 읽고 더 정확하지만, 영수증 그림이
+                  OpenAI로 전송되고 1쪽당 몇 원의 비용이 들어요. 같은 파일을
+                  다시 올리면 이 컴퓨터에 저장된 결과를 써서 비용이 들지 않아요.
+                </span>
+              </span>
+            </label>
           </>
         )}
 
@@ -2011,6 +2049,28 @@ const primaryBtn: CSSProperties = {
   cursor: "pointer",
 };
 
+const aiToggleRow: CSSProperties = {
+  display: "flex",
+  alignItems: "flex-start",
+  gap: 8,
+  margin: "10px 0 14px",
+  padding: "10px 12px",
+  borderRadius: 8,
+  background: "#f7f8fa",
+  border: "1px solid #e6e8eb",
+  fontSize: 13,
+  color: "#3a4149",
+  cursor: "pointer",
+  lineHeight: 1.5,
+};
+const aiToggleBadge: CSSProperties = {
+  fontSize: 11.5,
+  color: "#5f6873",
+  background: "#eef0f3",
+  borderRadius: 6,
+  padding: "1px 6px",
+};
+const aiToggleHint: CSSProperties = { fontSize: 12, color: "#8a9099" };
 const primaryBtnDisabled: CSSProperties = {
   ...primaryBtn,
   background: "#c7ccd3",

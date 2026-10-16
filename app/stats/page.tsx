@@ -21,12 +21,23 @@ interface ReceiptJob {
   leftover: number;
   textItems?: number;
   ocrPages?: number;
+  aiPages?: number;
+  aiCachedPages?: number;
+  aiTokens?: number;
   error?: string;
 }
 
 // 영수증 인식 결과를 한 줄 원인으로 설명한다.
 function receiptDiagnosis(j: ReceiptJob): { ok: boolean; text: string } {
-  const ocr = j.ocrPages ? ` (글자 인식 OCR ${j.ocrPages}쪽)` : "";
+  const how = [
+    j.aiPages || j.aiCachedPages
+      ? `AI ${(j.aiPages || 0) + (j.aiCachedPages || 0)}쪽${
+          j.aiTokens ? ` · 토큰 ${j.aiTokens.toLocaleString("ko-KR")}` : ""
+        }${j.aiCachedPages ? ` · 재사용 ${j.aiCachedPages}쪽` : ""}`
+      : "",
+    j.ocrPages ? `글자 인식 OCR ${j.ocrPages}쪽` : "",
+  ].filter(Boolean);
+  const ocr = how.length ? ` (${how.join(" / ")})` : "";
   if (j.error && j.recognized === 0)
     return { ok: false, text: `PDF를 읽지 못함 — ${j.error}` };
   if (j.recognized === 0) {

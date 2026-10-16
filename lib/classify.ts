@@ -10,6 +10,7 @@ import {
 import type { ClassifiedTransaction, Transaction } from "./types";
 import { getLearnedMap, getLearnedGateways, normalizeMerchant } from "./store";
 import { isPaymentGateway, looksLikeGateway } from "./gateways";
+import { DEFAULT_AI_MODEL, isReasoningModel } from "./aiModel";
 
 // Confidence below this -> we still apply the AI guess but flag it so the user
 // is asked to confirm in the review popup.
@@ -162,7 +163,7 @@ async function classifyByAI(
     number,
     { category: Category | "UNCLASSIFIED"; confidence: number }
   >();
-  const model = process.env.OPENAI_MODEL || "gpt-5-mini";
+  const model = process.env.OPENAI_MODEL || DEFAULT_AI_MODEL;
   const diag: AiDiagnostic = {
     status: "ok",
     model,
@@ -211,15 +212,12 @@ async function classifyByAI(
     'Classify each transaction. Return JSON {"results":[{"id":number,"category":string,"confidence":0..1}]}.\n' +
     JSON.stringify(items);
 
-  // GPT-5·o 계열(추론 모델)은 temperature 를 보내면 400 오류가 난다.
-  // 대신 reasoning_effort 를 낮게 줘서 응답 속도를 확보한다(단순 분류 작업).
+  // 추론 모델은 reasoning_effort 를 낮게 줘서 응답 속도를 확보한다(단순 분류 작업).
   // 구형 모델(gpt-4o-mini 등)은 기존처럼 temperature 0 으로 결과를 고정한다.
-  const isReasoningModel = /^(gpt-5|o\d)/i.test(model);
-
   try {
     const resp = await client.chat.completions.create({
       model,
-      ...(isReasoningModel
+      ...(isReasoningModel(model)
         ? { reasoning_effort: "low" }
         : { temperature: 0 }),
       response_format: { type: "json_object" },

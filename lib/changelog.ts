@@ -10,6 +10,17 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.6.0",
+    date: "2026-10-16",
+    changes: [
+      "🤖 'AI로 영수증 읽기' 토글 추가 (기본은 OCR) — 글자 없는 영수증 PDF를 AI가 읽어요. 처음 보는 양식도 읽고 가맹점명이 더 정확해요",
+      "AI가 실패한 페이지는 자동으로 OCR로 대신 읽기",
+      "같은 PDF를 다시 올리면 저장된 AI 결과를 재사용 (비용 0원)",
+      "AI 모델을 gpt-5.6-luna 로 변경 (gpt-5-mini 는 12/11 종료 예정) — 가맹점 분류·영수증 인식 공통",
+      "통계 영수증 인식 기록에 AI 사용 페이지·토큰 표시",
+    ],
+  },
+  {
     version: "2.5.0",
     date: "2026-10-13",
     changes: [

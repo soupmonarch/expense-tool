@@ -18,6 +18,22 @@ const RENDER_SCALE = 3;
 
 export type OcrProgress = (msg: string) => void;
 
+// pdf.js 페이지를 흰 바탕 캔버스에 그린다 (OCR · AI 인식 공용).
+export async function renderPageToCanvas(
+  page: any,
+  scale: number,
+): Promise<HTMLCanvasElement> {
+  const viewport = page.getViewport({ scale });
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.ceil(viewport.width);
+  canvas.height = Math.ceil(viewport.height);
+  const ctx = canvas.getContext("2d")!;
+  ctx.fillStyle = "#fff";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  await page.render({ canvasContext: ctx, viewport }).promise;
+  return canvas;
+}
+
 // pageIndices: 0부터 시작하는 원본 페이지 번호들
 export async function ocrReceiptPages(
   bytes: Uint8Array,
@@ -53,14 +69,7 @@ export async function ocrReceiptPages(
         `영수증 글자 인식(OCR) 중 · ${k + 1}/${pageIndices.length}페이지 · 지금까지 ${out.length}장 인식`,
       );
       const page = await doc.getPage(p + 1);
-      const viewport = page.getViewport({ scale: RENDER_SCALE });
-      const canvas = document.createElement("canvas");
-      canvas.width = Math.ceil(viewport.width);
-      canvas.height = Math.ceil(viewport.height);
-      const ctx = canvas.getContext("2d")!;
-      ctx.fillStyle = "#fff";
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
-      await page.render({ canvasContext: ctx, viewport }).promise;
+      const canvas = await renderPageToCanvas(page, RENDER_SCALE);
 
       // 좌/우 반쪽을 나눠 (가능하면 동시에) 읽는다.
       const halfW = Math.floor(canvas.width / 2);

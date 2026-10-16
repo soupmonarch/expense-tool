@@ -119,6 +119,7 @@ export type ReceiptProgress = (msg: string) => void;
 export async function parseReceiptsRemote(
   bytes: Uint8Array,
   onProgress?: ReceiptProgress,
+  options: { useAi?: boolean } = {},
 ): Promise<ParsedReceipts> {
   const chunks = await splitPdfBytes(bytes);
   const receipts: ReceiptInfo[] = [];
@@ -162,18 +163,37 @@ export async function parseReceiptsRemote(
     if (!sample && parsed.sample) sample = parsed.sample;
   }
 
-  // 글자가 없는 페이지는 브라우저에서 OCR 로 읽는다(실패해도 나머지 결과는 유지).
+  // 글자가 없는 페이지: "AI로 영수증 읽기"가 켜져 있으면 AI 로, 아니면 OCR 로 읽는다.
+  // AI 가 실패한 페이지는 OCR 로 대신 읽는다(실패해도 나머지 결과는 유지).
   let ocrPages = 0;
-  if (ocrTargets.length > 0) {
+  const ai = { pages: 0, cached: 0, tokens: 0 };
+  let ocrQueue = ocrTargets;
+  if (ocrTargets.length > 0 && options.useAi) {
+    try {
+      const { aiReceiptPages } = await import("./aiReceipts");
+      const r = await aiReceiptPages(bytes, ocrTargets, onProgress);
+      receipts.push(...r.receipts);
+      ai.pages = r.aiPages;
+      ai.cached = r.cachedPages;
+      ai.tokens = r.inputTokens + r.outputTokens;
+      if (r.error) errors.push("AI 인식 일부 실패(OCR로 대신 읽음): " + r.error);
+      ocrQueue = r.failedPages;
+    } catch (e: any) {
+      errors.push("AI 인식 실패(OCR로 대신 읽음): " + (e?.message || e));
+    }
+  }
+  if (ocrQueue.length > 0) {
     try {
       const { ocrReceiptPages } = await import("./ocrReceipts");
-      const found = await ocrReceiptPages(bytes, ocrTargets, onProgress);
+      const found = await ocrReceiptPages(bytes, ocrQueue, onProgress);
       receipts.push(...found);
-      ocrPages = ocrTargets.length;
+      ocrPages = ocrQueue.length;
     } catch (e: any) {
       errors.push("글자 인식(OCR) 실패: " + (e?.message || e));
     }
   }
+  // 페이지·좌우 순서로 정렬 (AI·OCR 결과가 섞여도 원본 순서 유지)
+  receipts.sort((a, b) => a.page - b.page || (a.side === b.side ? 0 : a.side === "L" ? -1 : 1));
 
   return {
     receipts,
@@ -181,6 +201,8 @@ export async function parseReceiptsRemote(
     error: errors.length ? errors.join(" / ") : undefined,
     sample: receipts.length === 0 ? sample : undefined,
     ...(ocrPages ? { ocrPages } : {}),
+    ...(ai.pages ? { aiPages: ai.pages, aiTokens: ai.tokens } : {}),
+    ...(ai.cached ? { aiCachedPages: ai.cached } : {}),
   };
 }
 
@@ -228,6 +250,9 @@ export interface ReceiptStatClient {
   leftover: number;
   textItems?: number; // 인식 0건일 때 PDF에서 읽힌 글자 조각 수
   ocrPages?: number; // OCR 로 읽은 페이지 수
+  aiPages?: number; // AI 로 읽은 페이지 수
+  aiCachedPages?: number; // 저장된 AI 결과를 다시 쓴 페이지 수
+  aiTokens?: number; // AI 인식 토큰 수
   error?: string;
 }
 
@@ -240,6 +265,8 @@ export function receiptStats(
     recognized: parsed.receipts.length,
     ...(parsed.error ? { error: parsed.error } : {}),
     ...(parsed.ocrPages ? { ocrPages: parsed.ocrPages } : {}),
+    ...(parsed.aiPages ? { aiPages: parsed.aiPages, aiTokens: parsed.aiTokens || 0 } : {}),
+    ...(parsed.aiCachedPages ? { aiCachedPages: parsed.aiCachedPages } : {}),
   };
   if (parsed.receipts.length === 0) {
     // 진단 문구 "[진단] 추출 텍스트조각 N개, ..." 에서 숫자만 꺼낸다.
@@ -282,6 +309,12 @@ export async function attachReceiptsToZip(
       ", 인식된 영수증: " +
       parsed.receipts.length,
   );
+  if (parsed.aiPages || parsed.aiCachedPages)
+    reportLines.push(
+      "AI로 읽은 페이지: " +
+        ((parsed.aiPages || 0) + (parsed.aiCachedPages || 0)) +
+        (parsed.aiCachedPages ? ` (이전에 읽은 결과 재사용 ${parsed.aiCachedPages})` : ""),
+    );
   if (parsed.ocrPages)
     reportLines.push(
       "글자가 없는 PDF여서 글자 인식(OCR)으로 읽은 페이지: " + parsed.ocrPages,
