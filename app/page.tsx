@@ -1,5 +1,6 @@
 "use client";
 
+import { T } from "@/lib/theme";
 import { version as APP_VERSION } from "../package.json";
 
 import {
@@ -26,7 +27,9 @@ import {
   receiptStats,
 } from "@/lib/receiptsClient";
 import type { ParsedReceipts } from "@/lib/parseReceipts";
-import { matchReceipts, type RowMeta } from "@/lib/buildReceiptPdf";
+import { matchReceipts, type Half, type RowMeta } from "@/lib/buildReceiptPdf";
+import { normalizeMerchant } from "@/lib/normalize";
+import CategoryPicker from "@/components/CategoryPicker";
 
 interface Row {
   id: number;
@@ -203,6 +206,13 @@ export default function Home() {
   );
   const [receiptLoading, setReceiptLoading] = useState(false);
   const [receiptErr, setReceiptErr] = useState<string | null>(null);
+  // 최종 검토에서 선택한 행과 그 영수증 미리보기
+  const [preview, setPreview] = useState<{
+    group: "expense" | "travel";
+    index: number;
+  } | null>(null);
+  const [previewImgs, setPreviewImgs] = useState<string[] | null>(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
   const inputRef = useRef<HTMLInputElement | null>(null);
 
   const reviewRows = useMemo(
@@ -506,9 +516,25 @@ export default function Home() {
   }
 
   function setRowCategory(id: number, category: string) {
+    setRowsCategory([id], category);
+  }
+
+  // 검토 팝업: 같은 가맹점이 여러 건이면 한 번에 같은 분류로 바꾼다.
+  // (결제대행사 행은 건마다 산 물건이 달라서 묶지 않는다)
+  function setReviewCategory(r: Row, category: string) {
+    if (r.source === "gateway") return setRowsCategory([r.id], category);
+    const key = normalizeMerchant(r.merchant);
+    const ids = [...reviewRows, ...aiRows]
+      .filter((x) => x.source !== "gateway" && normalizeMerchant(x.merchant) === key)
+      .map((x) => x.id);
+    setRowsCategory(ids.length ? ids : [r.id], category);
+  }
+
+  function setRowsCategory(ids: number[], category: string) {
+    const set = new Set(ids);
     setRows((prev) =>
       (prev || []).map((r) =>
-        r.id === id
+        set.has(r.id)
           ? {
               ...r,
               category,
@@ -740,36 +766,126 @@ export default function Home() {
     ? receiptMatch.expense.missingRows + receiptMatch.travel.missingRows
     : 0;
 
-  function renderCategorySelect(
-    value: string,
-    onChange: (v: string) => void,
-    style: CSSProperties,
-  ) {
+  // 선택한 행에 붙을 영수증 조각들 (미리보기용)
+  const previewHalves: Half[] | null =
+    preview && receiptMatch
+      ? receiptMatch[preview.group].rowHalves[preview.index] ?? null
+      : null;
+  const previewHalvesKey = previewHalves ? JSON.stringify(previewHalves) : "";
+
+  // 최종 검토가 열리고 영수증이 있으면 첫 행을 자동으로 미리보기한다.
+  useEffect(() => {
+    if (!finalOpen) {
+      setPreview(null);
+      return;
+    }
+    if (!preview && receiptMatch) {
+      setPreview(
+        finalExpense.length > 0
+          ? { group: "expense", index: 0 }
+          : finalTravel.length > 0
+            ? { group: "travel", index: 0 }
+            : null,
+      );
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [finalOpen, !!receiptMatch]);
+
+  useEffect(() => {
+    const bytes = receiptCache.current?.bytes;
+    if (!previewHalves || !bytes) {
+      setPreviewImgs(null);
+      return;
+    }
+    let cancelled = false;
+    setPreviewLoading(true);
+    (async () => {
+      try {
+        const { renderReceiptPiece } = await import("@/lib/receiptPreview");
+        const imgs: string[] = [];
+        for (const h of previewHalves) imgs.push(await renderReceiptPiece(bytes, h));
+        if (!cancelled) setPreviewImgs(imgs);
+      } catch {
+        if (!cancelled) setPreviewImgs(null);
+      } finally {
+        if (!cancelled) setPreviewLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [previewHalvesKey]);
+
+  // 좁은 화면(휴대폰)에서는 최종 검토를 한 줄로 쌓는다.
+  const [narrow, setNarrow] = useState(false);
+  const [tiny, setTiny] = useState(false); // 휴대폰 폭: 단계 표시줄은 현재 단계 이름만
+  useEffect(() => {
+    const onResize = () => {
+      setNarrow(window.innerWidth < 860);
+      setTiny(window.innerWidth < 520);
+    };
+    onResize();
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+
+  // 최종 검토 오른쪽(좁은 화면에서는 위쪽)의 영수증 미리보기 칸
+  function renderPreviewPanel(compact: boolean) {
+    const row =
+      preview && (preview.group === "expense" ? finalExpense : finalTravel)[preview.index];
     return (
-      <select style={style} value={value} onChange={(e) => onChange(e.target.value)}>
-        <optgroup label="Expense">
-          {EXPENSE_CATEGORIES.map((c) => (
-            <option key={c} value={c}>
-              {c}
-            </option>
-          ))}
-        </optgroup>
-        <optgroup label="Travel">
-          {TRAVEL_CATEGORIES.map((c) => (
-            <option key={c} value={c}>
-              {c}
-            </option>
-          ))}
-        </optgroup>
-        <option value={UNCLASSIFIED}>(미분류 유지 — 나중에)</option>
-      </select>
+      <div style={compact ? previewPanelCompact : previewPanel}>
+        <div style={previewHead}>
+          {row ? (
+            <>
+              <b>
+                {preview!.group === "expense" ? "Expense" : "Travel"} {preview!.index + 1}
+              </b>{" "}
+              · {row.merchant || "(가맹점명 없음)"} · {fmt(row.amount)}원
+            </>
+          ) : (
+            "왼쪽 목록에서 행을 누르면 영수증이 보여요"
+          )}
+        </div>
+        <div style={compact ? previewBodyCompact : previewBody}>
+          {row && !previewHalves && (
+            <div style={previewEmpty}>이 항목에 맞는 영수증을 찾지 못했어요</div>
+          )}
+          {previewHalves && previewLoading && !previewImgs && (
+            <div style={previewEmpty}>영수증 불러오는 중…</div>
+          )}
+          {previewHalves && previewImgs && (
+            <div style={previewImgs.length > 1 ? previewPair : undefined}>
+              {previewImgs.map((src, i) => (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  key={i}
+                  src={src}
+                  alt={i === 0 ? "영수증" : "취소 영수증"}
+                  style={previewImg}
+                />
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
     );
+  }
+
+  // 검토 팝업에서 같은 가맹점(결제대행사 제외)이 몇 건인지 — "함께 적용" 안내용
+  const sameMerchantCount = new Map<string, number>();
+  for (const x of [...reviewRows, ...aiRows]) {
+    if (x.source === "gateway") continue;
+    const k = normalizeMerchant(x.merchant);
+    sameMerchantCount.set(k, (sameMerchantCount.get(k) || 0) + 1);
   }
 
   function renderFinalSection(
     label: string,
     list: Payload[],
     matched?: boolean[],
+    group?: "expense" | "travel",
   ) {
     return (
       <div style={finalSection}>
@@ -782,10 +898,18 @@ export default function Home() {
         {list.length === 0 && <div style={mutedText}>해당 항목 없음</div>}
         {list.map((p, i) => {
           const unclassified = !VALID_CATEGORIES.has(p.category);
+          const selected =
+            !!group && preview?.group === group && preview.index === i;
+          const clickable = !!group && !!receiptMatch;
           return (
             <div
               key={p.id !== undefined ? "r" + p.id : "o" + i}
-              style={unclassified ? finalRowWarn : finalRow}
+              style={{
+                ...(unclassified ? finalRowWarn : finalRow),
+                ...(clickable ? { cursor: "pointer" } : null),
+                ...(selected ? finalRowSelected : null),
+              }}
+              onClick={clickable ? () => setPreview({ group: group!, index: i }) : undefined}
             >
               <div style={finalRowTop}>
                 <span style={finalIdx}>{i + 1}</span>
@@ -804,11 +928,13 @@ export default function Home() {
                 </div>
               )}
               {p.id !== undefined ? (
-                renderCategorySelect(
-                  p.category,
-                  (v) => setRowCategory(p.id as number, v),
-                  finalSelect,
-                )
+                <div onClick={(e) => e.stopPropagation()}>
+                  <CategoryPicker
+                    size="sm"
+                    value={p.category}
+                    onChange={(v) => setRowCategory(p.id as number, v)}
+                  />
+                </div>
               ) : (
                 <div style={mutedText}>환불(음수) 행 · {p.category}</div>
               )}
@@ -889,7 +1015,17 @@ export default function Home() {
             />
           </div>
         )}
-        {renderCategorySelect(r.category, (v) => setRowCategory(r.id, v), select)}
+        <CategoryPicker
+          value={r.category}
+          onChange={(v) => setReviewCategory(r, v)}
+        />
+        {!isGateway && (sameMerchantCount.get(normalizeMerchant(r.merchant)) || 0) > 1 && (
+          <div style={sameHint}>
+            같은 가맹점{" "}
+            {sameMerchantCount.get(normalizeMerchant(r.merchant))}건 — 분류를 고르면
+            함께 바뀌어요
+          </div>
+        )}
         {isGateway ? (
           <label style={learnRow}>
             <input type="checkbox" checked={false} disabled />
@@ -924,10 +1060,52 @@ export default function Home() {
     );
   }
 
+  // 지금 단계: ① 파일 올리기 → ② 확인 → ③ 최종 검토 → ④ 다운로드
+  const currentStep = done ? 4 : finalOpen ? 3 : rows ? 2 : 1;
+  const STEPS = ["파일 올리기", "확인", "최종 검토", "다운로드"];
+
   return (
     <main style={wrap}>
-      <div style={card}>
-        <h1 style={title}>Expense Tool</h1>
+      <div style={tiny ? { ...card, padding: 20 } : card}>
+        <header style={headerRow}>
+          <h1 style={title}>Expense Tool</h1>
+          <nav style={topNav}>
+            <a href="/learned" style={topNavLink}>학습 데이터</a>
+            <a href="/stats" style={topNavLink}>통계</a>
+            <a href="/manual.pdf" target="_blank" rel="noopener noreferrer" style={topNavLink}>
+              사용 설명서
+            </a>
+            <a href="/changelog" style={topNavLink}>업데이트</a>
+          </nav>
+        </header>
+
+        <ol style={stepper}>
+          {STEPS.map((label, i) => {
+            const n = i + 1;
+            const state = n < currentStep ? "done" : n === currentStep ? "now" : "next";
+            return (
+              <li
+                key={label}
+                style={{ ...stepItem, ...(tiny && state === "now" ? { flex: "0 0 auto" } : null) }}
+              >
+                <span
+                  style={{
+                    ...stepDot,
+                    ...(state === "done" ? stepDotDone : state === "now" ? stepDotNow : null),
+                  }}
+                >
+                  {state === "done" ? "✓" : n}
+                </span>
+                {(!tiny || state === "now") && (
+                  <span style={state === "next" ? stepLabelNext : stepLabel}>{label}</span>
+                )}
+                {n < STEPS.length && (
+                  <span style={{ ...stepLine, ...(n < currentStep ? stepLineDone : null) }} />
+                )}
+              </li>
+            );
+          })}
+        </ol>
 
         {resume && !rows && !loading && (
           <div style={resumeBox}>
@@ -964,9 +1142,9 @@ export default function Home() {
         <div style={modeRow}>
           {(
             [
-              ["both", "📊+🧾 둘 다 (권장)"],
-              ["excel", "📊 엑셀만"],
-              ["pdf", "🧾 영수증 PDF만"],
+              ["both", "엑셀 + 영수증 (권장)"],
+              ["excel", "엑셀만"],
+              ["pdf", "영수증 PDF만"],
             ] as const
           ).map(([m, label]) => (
             <button
@@ -1076,24 +1254,36 @@ export default function Home() {
                 ))}
               </div>
             )}
-            <label style={aiToggleRow}>
-              <input
-                type="checkbox"
-                checked={aiReceipt}
-                onChange={(e) => toggleAiReceipt(e.target.checked)}
-              />
-              <span>
-                <b>🤖 AI로 영수증 읽기</b>{" "}
-                <span style={aiToggleBadge}>{aiReceipt ? "켜짐" : "꺼짐 · OCR 사용"}</span>
-                <br />
-                <span style={aiToggleHint}>
-                  글자가 없는 영수증 PDF(스캔·인쇄 PDF)를 OCR 대신 AI가 읽어요.
-                  처음 보는 양식도 읽고 더 정확하지만, 영수증 그림이
-                  OpenAI로 전송되고 1쪽당 몇 원의 비용이 들어요. 같은 파일을
-                  다시 올리면 이 컴퓨터에 저장된 결과를 써서 비용이 들지 않아요.
-                </span>
-              </span>
-            </label>
+            <div style={readModeBox}>
+              <div style={readModeLabel}>글자가 없는 영수증 PDF(스캔·인쇄 PDF) 읽는 방법</div>
+              <div style={readModeSeg} role="radiogroup" aria-label="영수증 읽는 방법">
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={!aiReceipt}
+                  style={!aiReceipt ? segOcrOn : segOff}
+                  onClick={() => aiReceipt && toggleAiReceipt(false)}
+                >
+                  OCR 사용
+                  <span style={segSub}>무료 · 내 컴퓨터에서 처리</span>
+                </button>
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={aiReceipt}
+                  style={aiReceipt ? segAiOn : segOff}
+                  onClick={() => !aiReceipt && toggleAiReceipt(true)}
+                >
+                  AI 사용
+                  <span style={segSub}>더 정확 · 1쪽 약 1원</span>
+                </button>
+              </div>
+              <div style={aiReceipt ? readModeHintAi : readModeHintOcr}>
+                {aiReceipt
+                  ? "AI가 읽어요. 처음 보는 양식도 읽고 가맹점명이 더 정확하지만, 영수증 그림이 OpenAI로 전송돼요. 같은 파일을 다시 올리면 저장된 결과를 써서 비용이 들지 않아요."
+                  : "컴퓨터 안에서 글자 인식(OCR)으로 읽어요. 영수증이 밖으로 나가지 않아요. 결과가 이상하면 AI 사용으로 바꿔 보세요."}
+              </div>
+            </div>
           </>
         )}
 
@@ -1227,58 +1417,36 @@ export default function Home() {
             disabled={downloading}
             style={button(downloading)}
           >
-            {downloading ? "생성 중…" : "📝 최종 검토 후 다운로드"}
+            {downloading ? "생성 중…" : "최종 검토 후 다운로드"}
           </button>
         )}
 
         {done && (
           <div style={doneBox}>
-            🎉 다운로드가 완료됐습니다! 제출 전에 생성된 Expense·Travel 양식을
-            한 번씩 검토해 주세요.
+            다운로드가 완료됐어요. 제출 전에 Expense·Travel 양식을 한 번씩 확인해 주세요.
           </div>
         )}
 
-        <div style={footerNav}>
-          <a href="/learned" style={navBtn}>
-            📚 학습 데이터 관리
-          </a>
-          <a
-            href="/manual.pdf"
-            target="_blank"
-            rel="noopener noreferrer"
-            style={navBtn}
+        <footer style={footer}>
+          <span>
+            버그·오류 제보 · {BUG_REPORT_NAME} · WeChat{" "}
+            <span style={bugId}>{BUG_REPORT_WECHAT}</span>
+          </span>
+          <button
+            type="button"
+            style={wechatCopied ? bugCopyBtnDone : bugCopyBtn}
+            onClick={copyWechatId}
           >
-            📖 사용 설명서
-          </a>
-          <a href="/stats" style={navBtn}>
-            📊 통계
-          </a>
-          <a href="/changelog" style={navBtn}>
-            🆕 업데이트 이력
-          </a>
-        </div>
-        <div style={bugBox}>
-          <div style={bugTitle}>🐞 버그·오류 제보</div>
-          <div style={bugRow}>
-            <span>
-              {BUG_REPORT_NAME} · WeChat{" "}
-              <span style={bugId}>{BUG_REPORT_WECHAT}</span>
-            </span>
-            <button
-              type="button"
-              style={wechatCopied ? bugCopyBtnDone : bugCopyBtn}
-              onClick={copyWechatId}
-            >
-              {wechatCopied ? "✅ 복사됨" : "📋 ID 복사"}
-            </button>
-          </div>
-        </div>
-        <p style={versionText}>Expense Tool v{APP_VERSION}</p>
+            {wechatCopied ? "복사됨 ✓" : "ID 복사"}
+          </button>
+          <span style={versionInline}>v{APP_VERSION}</span>
+        </footer>
       </div>
 
       {reviewOpen && (
         <div style={overlay} onClick={() => setReviewOpen(false)}>
           <div style={modal} onClick={(e) => e.stopPropagation()}>
+            <div style={modalStep}>2단계</div>
             <h2 style={modalTitle}>확인이 필요한 항목</h2>
             <p style={modalSub}>
               아래 항목들을 확인해 주세요. 취소·환불 여부와 분류를 정하면
@@ -1442,14 +1610,29 @@ export default function Home() {
 
       {finalOpen && rows && (
         <div style={overlay} onClick={() => setFinalOpen(false)}>
-          <div style={modal} onClick={(e) => e.stopPropagation()}>
-            <h2 style={modalTitle}>📝 최종 검토</h2>
+          <div
+            style={{
+              ...modal,
+              maxWidth: receiptMatch && !narrow ? 1080 : 640,
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div style={modalStep}>3단계</div>
+            <h2 style={modalTitle}>최종 검토</h2>
             <p style={modalSub}>
-              아래 내용 그대로 엑셀이 만들어져요. 분류가 틀린 항목이 있으면
-              여기서 바로 바꿀 수 있어요. (여기서 바꾼 분류는 이번 파일에만
-              반영되고 학습되지는 않아요.)
+              아래 내용 그대로 엑셀이 만들어져요. 분류가 틀린 항목은 여기서 바로
+              바꿀 수 있어요 (이번 파일에만 반영, 학습은 안 돼요).
+              {receiptMatch ? " 행을 누르면 붙을 영수증이 보여요." : ""}
             </p>
 
+            <div
+              style={
+                receiptMatch && !narrow
+                  ? finalBodyTwoCol
+                  : { display: "flex", flexDirection: "column", flex: 1, minHeight: 0 }
+              }
+            >
+            {receiptMatch && narrow && renderPreviewPanel(true)}
             <div style={reviewList}>
               <div style={finalSummary}>
                 <div>
@@ -1544,15 +1727,19 @@ export default function Home() {
                 </div>
               )}
               {renderFinalSection(
-                "🧾 Expense",
+                "Expense",
                 finalExpense,
                 receiptMatch?.expense.rowMatched,
+                "expense",
               )}
               {renderFinalSection(
-                "✈️ Travel",
+                "Travel",
                 finalTravel,
                 receiptMatch?.travel.rowMatched,
+                "travel",
               )}
+            </div>
+            {receiptMatch && !narrow && renderPreviewPanel(false)}
             </div>
 
             <div style={modalActions}>
@@ -1573,8 +1760,8 @@ export default function Home() {
                 }}
               >
                 {mode !== "excel" && receiptFiles.length > 0
-                  ? "✅ 확인 완료 · 다운로드 (엑셀 2 + 영수증 PDF 2)"
-                  : "✅ 확인 완료 · 엑셀 다운로드"}
+                  ? "확인 완료 · 다운로드 (엑셀 2 + 영수증 PDF 2)"
+                  : "확인 완료 · 엑셀 다운로드"}
               </button>
             </div>
           </div>
@@ -1593,8 +1780,8 @@ const wrap: CSSProperties = {
 };
 const card: CSSProperties = {
   width: "100%",
-  maxWidth: 560,
-  background: "#fff",
+  maxWidth: 620,
+  background: T.surface,
   borderRadius: 16,
   padding: 32,
   boxShadow: "0 4px 24px rgba(0,0,0,0.06)",
@@ -1602,7 +1789,7 @@ const card: CSSProperties = {
 const title: CSSProperties = { fontSize: 22, margin: "0 0 8px" };
 const subtitle: CSSProperties = {
   fontSize: 14,
-  color: "#5f6873",
+  color: T.textMuted,
   lineHeight: 1.6,
   marginBottom: 24,
 };
@@ -1618,9 +1805,9 @@ const navBtn: CSSProperties = {
   gap: 6,
   padding: "8px 14px",
   fontSize: 13.5,
-  color: "#2d6cdf",
-  background: "#f0f5ff",
-  border: "1px solid #c9daf8",
+  color: T.primary,
+  background: T.primaryBg,
+  border: `1px solid ${T.primaryBorder}`,
   borderRadius: 8,
   textDecoration: "none",
   fontWeight: 600,
@@ -1629,7 +1816,7 @@ const drop: CSSProperties = {
   display: "flex",
   alignItems: "center",
   justifyContent: "center",
-  border: "2px dashed #c7ccd3",
+  border: `2px dashed ${T.borderStrong}`,
   borderRadius: 12,
   padding: "36px 16px",
   cursor: "pointer",
@@ -1640,8 +1827,8 @@ const drop: CSSProperties = {
 };
 const dropActive: CSSProperties = {
   ...drop,
-  border: "2px dashed #2d6cdf",
-  background: "#eef5ff",
+  border: `2px dashed ${T.primary}`,
+  background: T.primaryBg,
 };
 function button(disabled: boolean): CSSProperties {
   return {
@@ -1649,8 +1836,8 @@ function button(disabled: boolean): CSSProperties {
     padding: "12px 16px",
     borderRadius: 10,
     border: "none",
-    background: disabled ? "#c7ccd3" : "#2d6cdf",
-    color: "#fff",
+    background: disabled ? T.borderStrong : T.primary,
+    color: T.surface,
     fontSize: 15,
     fontWeight: 600,
     cursor: disabled ? "not-allowed" : "pointer",
@@ -1664,12 +1851,12 @@ const nameLabel: CSSProperties = {
   gap: 4,
   fontSize: 12,
   fontWeight: 600,
-  color: "#5f6873",
+  color: T.textMuted,
 };
 const nameInput: CSSProperties = {
   padding: "8px 10px",
   borderRadius: 8,
-  border: "1px solid #d7dbe0",
+  border: `1px solid ${T.border}`,
   fontSize: 13,
   fontWeight: 400,
 };
@@ -1678,8 +1865,8 @@ const errBox: CSSProperties = {
   marginBottom: 12,
   padding: 12,
   borderRadius: 8,
-  background: "#fdecea",
-  color: "#c0392b",
+  background: T.dangerBg,
+  color: T.danger,
   fontSize: 13,
 };
 const progressBox: CSSProperties = {
@@ -1687,8 +1874,8 @@ const progressBox: CSSProperties = {
   marginBottom: 12,
   padding: "10px 12px",
   borderRadius: 8,
-  background: "#eef4ff",
-  color: "#2d5bd7",
+  background: T.primaryBg,
+  color: T.primary,
   fontSize: 13,
 };
 const resumeBox: CSSProperties = {
@@ -1700,8 +1887,8 @@ const resumeBox: CSSProperties = {
   marginBottom: 16,
   padding: "12px 14px",
   borderRadius: 8,
-  background: "#fff8e6",
-  border: "1px solid #f0dfae",
+  background: T.warningBg,
+  border: `1px solid ${T.warningBorder}`,
   fontSize: 13.5,
 };
 const resumeBtnRow: CSSProperties = { display: "flex", gap: 8 };
@@ -1709,8 +1896,8 @@ const resumeBtn: CSSProperties = {
   padding: "8px 14px",
   borderRadius: 8,
   border: "none",
-  background: "#2d6cdf",
-  color: "#fff",
+  background: T.primary,
+  color: T.surface,
   fontWeight: 600,
   fontSize: 13.5,
   cursor: "pointer",
@@ -1718,9 +1905,9 @@ const resumeBtn: CSSProperties = {
 const resumeGhostBtn: CSSProperties = {
   padding: "8px 14px",
   borderRadius: 8,
-  border: "1px solid #d5dbe3",
-  background: "#fff",
-  color: "#5f6873",
+  border: `1px solid ${T.border}`,
+  background: T.surface,
+  color: T.textMuted,
   fontWeight: 600,
   fontSize: 13.5,
   cursor: "pointer",
@@ -1730,7 +1917,7 @@ const navBtnGhost: CSSProperties = {
   alignItems: "center",
   padding: "8px 10px",
   fontSize: 13,
-  color: "#5f6873",
+  color: T.textMuted,
   textDecoration: "none",
   fontWeight: 600,
 };
@@ -1745,10 +1932,10 @@ const bugBox: CSSProperties = {
   marginTop: 20,
   padding: "10px 14px",
   borderRadius: 8,
-  background: "#f7f8fa",
-  border: "1px solid #e6e8eb",
+  background: T.surfaceAlt,
+  border: `1px solid ${T.divider}`,
   fontSize: 13,
-  color: "#3a4149",
+  color: T.textSub,
 };
 const bugTitle: CSSProperties = {
   fontWeight: 600,
@@ -1763,14 +1950,14 @@ const bugRow: CSSProperties = {
 };
 const bugId: CSSProperties = {
   fontFamily: "monospace",
-  color: "#1f2329",
+  color: T.text,
 };
 const bugCopyBtn: CSSProperties = {
   padding: "6px 12px",
   borderRadius: 8,
-  border: "1px solid #c9daf8",
-  background: "#f0f5ff",
-  color: "#2d6cdf",
+  border: `1px solid ${T.primaryBorder}`,
+  background: T.primaryBg,
+  color: T.primary,
   fontSize: 12.5,
   fontWeight: 600,
   cursor: "pointer",
@@ -1778,22 +1965,22 @@ const bugCopyBtn: CSSProperties = {
 };
 const bugCopyBtnDone: CSSProperties = {
   ...bugCopyBtn,
-  border: "1px solid #bfe6cb",
-  background: "#eaf7ee",
-  color: "#1e874b",
+  border: `1px solid ${T.successBorder}`,
+  background: T.successBg,
+  color: T.success,
 };
 const versionText: CSSProperties = {
   marginTop: 12,
   marginBottom: 0,
   textAlign: "center",
   fontSize: 12,
-  color: "#9aa3ad",
+  color: T.textFaint,
 };
 const statBox: CSSProperties = {
   marginBottom: 12,
   padding: 14,
   borderRadius: 8,
-  background: "#f3f5f8",
+  background: T.surfaceAlt,
   fontSize: 13,
   lineHeight: 1.9,
 };
@@ -1802,26 +1989,26 @@ const doneBox: CSSProperties = {
   marginBottom: 12,
   padding: 14,
   borderRadius: 8,
-  background: "#eaf7ee",
-  color: "#1e874b",
+  background: T.successBg,
+  color: T.success,
   fontSize: 13,
   lineHeight: 1.6,
-  border: "1px solid #bfe6cb",
+  border: `1px solid ${T.successBorder}`,
 };
 const hint: CSSProperties = {
   marginTop: 8,
   fontSize: 12,
-  color: "#8a9099",
+  color: T.textFaint,
   lineHeight: 1.6,
 };
 const hiddenInput: CSSProperties = { display: "none" };
-const mutedText: CSSProperties = { color: "#8a9099" };
-const warnText: CSSProperties = { color: "#b9770e" };
-const okText: CSSProperties = { color: "#1e874b" };
+const mutedText: CSSProperties = { color: T.textFaint };
+const warnText: CSSProperties = { color: T.warning };
+const okText: CSSProperties = { color: T.success };
 const linkBtn: CSSProperties = {
   border: "none",
   background: "none",
-  color: "#2d6cdf",
+  color: T.primary,
   cursor: "pointer",
   fontSize: 13,
   fontWeight: 600,
@@ -1845,7 +2032,7 @@ const modal: CSSProperties = {
   maxHeight: "85vh",
   display: "flex",
   flexDirection: "column",
-  background: "#fff",
+  background: T.surface,
   borderRadius: 16,
   padding: 24,
   boxShadow: "0 12px 48px rgba(0,0,0,0.25)",
@@ -1853,7 +2040,7 @@ const modal: CSSProperties = {
 const modalTitle: CSSProperties = { fontSize: 18, margin: "0 0 6px" };
 const modalSub: CSSProperties = {
   fontSize: 13,
-  color: "#5f6873",
+  color: T.textMuted,
   marginBottom: 16,
 };
 const reviewList: CSSProperties = {
@@ -1864,7 +2051,7 @@ const reviewList: CSSProperties = {
 const sectionLabel: CSSProperties = {
   fontSize: 13,
   fontWeight: 700,
-  color: "#1f2329",
+  color: T.text,
   margin: "12px 0 4px",
 };
 const sectionRow: CSSProperties = {
@@ -1878,58 +2065,58 @@ const sectionTools: CSSProperties = {
   alignItems: "center",
   gap: 6,
   fontSize: 12,
-  color: "#8a9099",
+  color: T.textFaint,
 };
 const miniBtn: CSSProperties = {
-  border: "1px solid #c7ccd3",
-  background: "#fff",
+  border: `1px solid ${T.borderStrong}`,
+  background: T.surface,
   borderRadius: 6,
   fontSize: 12,
   padding: "2px 8px",
   cursor: "pointer",
-  color: "#5f6873",
+  color: T.textMuted,
 };
 const reviewItem: CSSProperties = {
   display: "flex",
   flexDirection: "column",
   gap: 6,
   padding: "12px 0",
-  borderBottom: "1px solid #eef0f3",
+  borderBottom: `1px solid ${T.divider}`,
 };
 const reviewInfo: CSSProperties = { display: "flex", flexDirection: "column" };
 const reviewMerchant: CSSProperties = { fontSize: 14, fontWeight: 600 };
 const reviewMeta: CSSProperties = {
   fontSize: 12,
-  color: "#8a9099",
+  color: T.textFaint,
   marginTop: 2,
 };
 const reviewQuestion: CSSProperties = {
   fontSize: 13,
-  color: "#1f2329",
+  color: T.text,
   marginTop: 4,
 };
 const gatewayNote: CSSProperties = {
   fontSize: 12,
-  color: "#b9770e",
+  color: T.warning,
   marginTop: 4,
   lineHeight: 1.5,
 };
 const aiNote: CSSProperties = {
   fontSize: 12,
-  color: "#2d6cdf",
+  color: T.primary,
   marginTop: 4,
   lineHeight: 1.5,
 };
 const aiSectionHint: CSSProperties = {
   fontSize: 12,
-  color: "#5f6873",
+  color: T.textMuted,
   lineHeight: 1.5,
   marginBottom: 4,
 };
 const finalSummary: CSSProperties = {
   padding: 12,
   borderRadius: 8,
-  background: "#f3f5f8",
+  background: T.surfaceAlt,
   fontSize: 13,
   lineHeight: 1.8,
   marginBottom: 8,
@@ -1937,57 +2124,57 @@ const finalSummary: CSSProperties = {
 const finalWarnBox: CSSProperties = {
   padding: "8px 12px",
   borderRadius: 8,
-  background: "#fdecea",
-  color: "#c0392b",
+  background: T.dangerBg,
+  color: T.danger,
   fontSize: 12.5,
   lineHeight: 1.5,
   marginBottom: 8,
 };
 const finalSection: CSSProperties = { marginTop: 12 };
-const receiptOk: CSSProperties = { fontSize: 11.5, color: "#1e874b" };
+const receiptOk: CSSProperties = { fontSize: 11.5, color: T.success };
 const receiptMissingText: CSSProperties = {
   fontSize: 11.5,
-  color: "#c0392b",
+  color: T.danger,
   fontWeight: 600,
 };
 const leftoverBox: CSSProperties = {
   padding: "8px 12px",
   borderRadius: 8,
-  background: "#fff8e6",
-  border: "1px solid #f0dfae",
+  background: T.warningBg,
+  border: `1px solid ${T.warningBorder}`,
   fontSize: 12.5,
   marginBottom: 8,
 };
 const leftoverSummary: CSSProperties = {
   cursor: "pointer",
   fontWeight: 600,
-  color: "#8a6100",
+  color: T.warningText,
 };
 const leftoverRow: CSSProperties = {
   padding: "4px 0",
-  borderTop: "1px solid #f3e6c4",
-  color: "#5f4b00",
+  borderTop: `1px solid ${T.warningBorder}`,
+  color: T.warningText,
 };
 const finalHeader: CSSProperties = {
   display: "flex",
   justifyContent: "space-between",
   fontSize: 13.5,
   fontWeight: 700,
-  color: "#1f2329",
+  color: T.text,
   padding: "6px 0",
-  borderBottom: "2px solid #e6e8eb",
+  borderBottom: `2px solid ${T.divider}`,
 };
 const finalRow: CSSProperties = {
   display: "flex",
   flexDirection: "column",
   gap: 4,
   padding: "8px 0",
-  borderBottom: "1px solid #eef0f3",
+  borderBottom: `1px solid ${T.divider}`,
 };
 const finalRowWarn: CSSProperties = {
   ...finalRow,
-  background: "#fff5f4",
-  borderLeft: "3px solid #e74c3c",
+  background: T.dangerBgSoft,
+  borderLeft: `3px solid ${T.dangerStrong}`,
   paddingLeft: 6,
 };
 const finalRowTop: CSSProperties = {
@@ -1997,7 +2184,7 @@ const finalRowTop: CSSProperties = {
   fontSize: 12.5,
 };
 const finalIdx: CSSProperties = {
-  color: "#9aa3ad",
+  color: T.textFaint,
   minWidth: 18,
   fontVariantNumeric: "tabular-nums",
 };
@@ -2005,14 +2192,14 @@ const finalSelect: CSSProperties = {
   width: "100%",
   padding: "5px 8px",
   borderRadius: 6,
-  border: "1px solid #d7dbe0",
+  border: `1px solid ${T.border}`,
   fontSize: 12,
 };
 const select: CSSProperties = {
   width: "100%",
   padding: "8px 10px",
   borderRadius: 8,
-  border: "1px solid #c7ccd3",
+  border: `1px solid ${T.borderStrong}`,
   fontSize: 13,
 };
 const learnRow: CSSProperties = {
@@ -2020,10 +2207,10 @@ const learnRow: CSSProperties = {
   alignItems: "center",
   gap: 8,
   fontSize: 12,
-  color: "#1f2329",
+  color: T.text,
   cursor: "pointer",
 };
-const learnTextOff: CSSProperties = { color: "#b9770e" };
+const learnTextOff: CSSProperties = { color: T.warning };
 const modalActions: CSSProperties = {
   display: "flex",
   justifyContent: "flex-end",
@@ -2031,10 +2218,12 @@ const modalActions: CSSProperties = {
 };
 const ghostBtn: CSSProperties = {
   padding: "10px 18px",
+  whiteSpace: "nowrap",
+  flexShrink: 0,
   borderRadius: 10,
-  border: "1px solid #c7ccd3",
-  background: "#fff",
-  color: "#5f6873",
+  border: `1px solid ${T.borderStrong}`,
+  background: T.surface,
+  color: T.textMuted,
   fontSize: 14,
   cursor: "pointer",
 };
@@ -2042,13 +2231,235 @@ const primaryBtn: CSSProperties = {
   padding: "10px 18px",
   borderRadius: 10,
   border: "none",
-  background: "#2d6cdf",
-  color: "#fff",
+  background: T.primary,
+  color: T.surface,
   fontSize: 14,
   fontWeight: 600,
   cursor: "pointer",
 };
 
+const headerRow: CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "space-between",
+  gap: 12,
+  flexWrap: "wrap",
+  marginBottom: 14,
+};
+const topNav: CSSProperties = { display: "flex", gap: 4, flexWrap: "wrap" };
+const topNavLink: CSSProperties = {
+  fontSize: 12.5,
+  fontWeight: 600,
+  color: T.textMuted,
+  textDecoration: "none",
+  padding: "5px 9px",
+  borderRadius: 6,
+  background: T.surfaceAlt,
+};
+const stepper: CSSProperties = {
+  display: "flex",
+  listStyle: "none",
+  padding: 0,
+  margin: "0 0 18px",
+  gap: 0,
+};
+const stepItem: CSSProperties = {
+  flex: 1,
+  display: "flex",
+  alignItems: "center",
+  gap: 6,
+  minWidth: 0,
+};
+const stepDot: CSSProperties = {
+  flexShrink: 0,
+  width: 22,
+  height: 22,
+  borderRadius: "50%",
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center",
+  fontSize: 11.5,
+  fontWeight: 700,
+  background: T.divider,
+  color: T.textFaint,
+};
+const stepDotNow: CSSProperties = { background: T.primary, color: T.surface };
+const stepDotDone: CSSProperties = { background: T.success, color: T.surface };
+const stepLabel: CSSProperties = {
+  fontSize: 12.5,
+  fontWeight: 600,
+  color: T.text,
+  whiteSpace: "nowrap",
+};
+const stepLabelNext: CSSProperties = { ...stepLabel, color: T.textFaint, fontWeight: 500 };
+const stepLine: CSSProperties = {
+  flex: 1,
+  height: 2,
+  minWidth: 8,
+  margin: "0 6px",
+  background: T.divider,
+  borderRadius: 1,
+};
+const stepLineDone: CSSProperties = { background: T.success };
+const footer: CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 8,
+  flexWrap: "wrap",
+  marginTop: 24,
+  paddingTop: 14,
+  borderTop: `1px solid ${T.divider}`,
+  fontSize: 12,
+  color: T.textFaint,
+};
+const versionInline: CSSProperties = { marginLeft: "auto", color: T.textFaint };
+const readModeBox: CSSProperties = { margin: "10px 0 14px" };
+const readModeLabel: CSSProperties = {
+  fontSize: 12,
+  fontWeight: 600,
+  color: T.textMuted,
+  marginBottom: 6,
+};
+const readModeSeg: CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "1fr 1fr",
+  gap: 6,
+};
+const segBase: CSSProperties = {
+  display: "flex",
+  flexDirection: "column",
+  alignItems: "flex-start",
+  gap: 2,
+  padding: "9px 12px",
+  borderRadius: T.radiusSm,
+  fontSize: 13.5,
+  fontWeight: 700,
+  cursor: "pointer",
+  textAlign: "left",
+};
+const segOff: CSSProperties = {
+  ...segBase,
+  border: `1px solid ${T.border}`,
+  background: T.surface,
+  color: T.textMuted,
+};
+const segOcrOn: CSSProperties = {
+  ...segBase,
+  border: `2px solid ${T.ocr}`,
+  background: T.ocrBg,
+  color: T.ocr,
+};
+const segAiOn: CSSProperties = {
+  ...segBase,
+  border: `2px solid ${T.ai}`,
+  background: T.aiBg,
+  color: T.ai,
+};
+const segSub: CSSProperties = { fontSize: 11.5, fontWeight: 500, opacity: 0.85 };
+const readModeHintBase: CSSProperties = {
+  marginTop: 6,
+  padding: "7px 10px",
+  borderRadius: T.radiusSm,
+  fontSize: 12,
+  lineHeight: 1.5,
+};
+const readModeHintOcr: CSSProperties = {
+  ...readModeHintBase,
+  background: T.ocrBg,
+  color: T.ocr,
+  border: `1px solid ${T.ocrBorder}`,
+};
+const readModeHintAi: CSSProperties = {
+  ...readModeHintBase,
+  background: T.aiBg,
+  color: T.ai,
+  border: `1px solid ${T.aiBorder}`,
+};
+const modalStep: CSSProperties = {
+  fontSize: 11.5,
+  fontWeight: 700,
+  color: T.primary,
+  marginBottom: 2,
+};
+const sameHint: CSSProperties = {
+  fontSize: 12,
+  color: T.primary,
+  background: T.primaryBg,
+  borderRadius: 6,
+  padding: "3px 8px",
+  alignSelf: "flex-start",
+};
+const finalRowSelected: CSSProperties = {
+  background: T.primaryBg,
+  boxShadow: `inset 3px 0 0 ${T.primary}`,
+  paddingLeft: 8,
+};
+const finalBodyTwoCol: CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "minmax(0, 1.15fr) minmax(0, 0.85fr)",
+  gap: 16,
+  flex: 1,
+  minHeight: 0,
+};
+const previewPanel: CSSProperties = {
+  display: "flex",
+  flexDirection: "column",
+  minHeight: 0,
+  marginBottom: 16,
+  border: `1px solid ${T.divider}`,
+  borderRadius: T.radius,
+  background: T.surfaceAlt,
+  overflow: "hidden",
+};
+const previewPanelCompact: CSSProperties = {
+  ...previewPanel,
+  marginBottom: 10,
+  flexShrink: 0,
+};
+const previewHead: CSSProperties = {
+  padding: "8px 12px",
+  fontSize: 12.5,
+  color: T.textSub,
+  borderBottom: `1px solid ${T.divider}`,
+  background: T.surface,
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+  whiteSpace: "nowrap",
+};
+const previewBody: CSSProperties = {
+  flex: 1,
+  minHeight: 0,
+  overflowY: "auto",
+  padding: 12,
+  display: "flex",
+  alignItems: "flex-start",
+  justifyContent: "center",
+};
+const previewBodyCompact: CSSProperties = {
+  ...previewBody,
+  maxHeight: 220,
+};
+const previewEmpty: CSSProperties = {
+  margin: "auto",
+  fontSize: 12.5,
+  color: T.textFaint,
+  textAlign: "center",
+  padding: 20,
+};
+const previewPair: CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "1fr 1fr",
+  gap: 8,
+  width: "100%",
+};
+const previewImg: CSSProperties = {
+  display: "block",
+  width: "100%",
+  height: "auto",
+  background: T.surface,
+  borderRadius: 6,
+  boxShadow: "0 1px 4px rgba(0,0,0,0.08)",
+};
 const aiToggleRow: CSSProperties = {
   display: "flex",
   alignItems: "flex-start",
@@ -2056,24 +2467,24 @@ const aiToggleRow: CSSProperties = {
   margin: "10px 0 14px",
   padding: "10px 12px",
   borderRadius: 8,
-  background: "#f7f8fa",
-  border: "1px solid #e6e8eb",
+  background: T.surfaceAlt,
+  border: `1px solid ${T.divider}`,
   fontSize: 13,
-  color: "#3a4149",
+  color: T.textSub,
   cursor: "pointer",
   lineHeight: 1.5,
 };
 const aiToggleBadge: CSSProperties = {
   fontSize: 11.5,
-  color: "#5f6873",
-  background: "#eef0f3",
+  color: T.textMuted,
+  background: T.divider,
   borderRadius: 6,
   padding: "1px 6px",
 };
-const aiToggleHint: CSSProperties = { fontSize: 12, color: "#8a9099" };
+const aiToggleHint: CSSProperties = { fontSize: 12, color: T.textFaint };
 const primaryBtnDisabled: CSSProperties = {
   ...primaryBtn,
-  background: "#c7ccd3",
+  background: T.borderStrong,
   cursor: "not-allowed",
 };
 
@@ -2088,23 +2499,23 @@ const modeBtn: CSSProperties = {
   minWidth: 120,
   padding: "10px 12px",
   borderRadius: 10,
-  border: "1px solid #d7dbe0",
-  background: "#fff",
-  color: "#3a4149",
+  border: `1px solid ${T.border}`,
+  background: T.surface,
+  color: T.textSub,
   fontSize: 13,
   fontWeight: 600,
   cursor: "pointer",
 };
 const modeBtnActive: CSSProperties = {
   ...modeBtn,
-  border: "1px solid #2d6cdf",
-  background: "#eef3fd",
-  color: "#2d6cdf",
+  border: `1px solid ${T.primary}`,
+  background: T.primaryBg,
+  color: T.primary,
 };
 const modeHint: CSSProperties = {
   margin: "0 0 12px",
   fontSize: 12.5,
-  color: "#8a9099",
+  color: T.textFaint,
   lineHeight: 1.5,
 };
 const fileList: CSSProperties = {
@@ -2120,14 +2531,14 @@ const fileChip: CSSProperties = {
   gap: 8,
   padding: "8px 10px",
   borderRadius: 8,
-  background: "#f3f5f7",
+  background: T.surfaceAlt,
   fontSize: 13,
-  color: "#3a4149",
+  color: T.textSub,
 };
 const removeBtn: CSSProperties = {
   border: "none",
   background: "transparent",
-  color: "#8a9099",
+  color: T.textFaint,
   fontSize: 15,
   lineHeight: 1,
   cursor: "pointer",
@@ -2140,31 +2551,31 @@ const manualBox: CSSProperties = {
   padding: "8px 10px",
   marginTop: 6,
   borderRadius: 8,
-  background: "#fff7e6",
-  border: "1px solid #f0d28a",
+  background: T.warningBg,
+  border: `1px solid ${T.warningBorder}`,
 };
 const manualLabel: CSSProperties = {
   fontSize: 12,
-  color: "#b9770e",
+  color: T.warning,
   fontWeight: 600,
 };
 const manualInput: CSSProperties = {
   padding: "7px 9px",
   borderRadius: 7,
-  border: "1px solid #d7dbe0",
+  border: `1px solid ${T.border}`,
   fontSize: 13,
 };
 const listDetails: CSSProperties = {
-  border: "1px solid #e6e8eb",
+  border: `1px solid ${T.divider}`,
   borderRadius: 10,
-  background: "#fff",
+  background: T.surface,
   padding: "4px 8px",
 };
 const listSummary: CSSProperties = {
   cursor: "pointer",
   fontSize: 13,
   fontWeight: 600,
-  color: "#37474f",
+  color: T.text,
   padding: "6px 2px",
 };
 const listWrap: CSSProperties = {
@@ -2181,28 +2592,28 @@ const listRow: CSSProperties = {
   alignItems: "baseline",
   fontSize: 12.5,
   padding: "4px 2px",
-  borderTop: "1px solid #f0f2f4",
+  borderTop: `1px solid ${T.divider}`,
 };
 const listDate: CSSProperties = {
-  color: "#78909c",
+  color: T.textFaint,
   whiteSpace: "nowrap",
   fontVariantNumeric: "tabular-nums",
   minWidth: 116,
 };
 const listMerchant: CSSProperties = {
   flex: 1,
-  color: "#263238",
+  color: T.text,
   overflow: "hidden",
   textOverflow: "ellipsis",
   whiteSpace: "nowrap",
 };
 const listAmount: CSSProperties = {
-  color: "#263238",
+  color: T.text,
   whiteSpace: "nowrap",
   fontVariantNumeric: "tabular-nums",
 };
 const listCat: CSSProperties = {
-  color: "#90a4ae",
+  color: T.textFaint,
   whiteSpace: "nowrap",
   maxWidth: 120,
   overflow: "hidden",

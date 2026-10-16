@@ -1,5 +1,8 @@
 "use client";
 
+import { T } from "@/lib/theme";
+import CategoryPicker from "@/components/CategoryPicker";
+import { categoryLabel } from "@/lib/categoryLabels";
 import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import { EXPENSE_CATEGORIES, TRAVEL_CATEGORIES } from "@/lib/categories";
 import { PSP_MARK, historyLabel } from "@/lib/gateways";
@@ -53,33 +56,21 @@ function fmtAt(iso: string): string {
   });
 }
 
+// 한글 이름 + 검색되는 분류 선택기 (메인 화면과 같은 컴포넌트)
 function CategorySelect(props: {
   value: string;
   onChange: (v: string) => void;
   style?: CSSProperties;
 }) {
   return (
-    <select
-      style={props.style}
-      value={props.value}
-      onChange={(e) => props.onChange(e.target.value)}
-    >
-      <option value="">분류 선택…</option>
-      <optgroup label="Expense">
-        {EXPENSE_CATEGORIES.map((c) => (
-          <option key={c} value={c}>
-            {c}
-          </option>
-        ))}
-      </optgroup>
-      <optgroup label="Travel">
-        {TRAVEL_CATEGORIES.map((c) => (
-          <option key={c} value={c}>
-            {c}
-          </option>
-        ))}
-      </optgroup>
-    </select>
+    <div style={{ ...props.style, padding: 0, border: "none", background: "transparent" }}>
+      <CategoryPicker
+        size="sm"
+        allowUnclassified={false}
+        value={props.value}
+        onChange={props.onChange}
+      />
+    </div>
   );
 }
 
@@ -537,7 +528,12 @@ export default function LearnedPage() {
                           style={cellSelect}
                         />
                       ) : (
-                        e.category
+                        <>
+                          <b style={{ fontWeight: 600 }}>{categoryLabel(e.category)}</b>
+                          <div style={{ fontSize: 11, color: T.textFaint }}>
+                            {e.category}
+                          </div>
+                        </>
                       )}
                     </td>
                     <td style={tdC}>
@@ -792,15 +788,15 @@ const histFilterRow: CSSProperties = {
   margin: "4px 0 12px",
   flexWrap: "wrap",
 };
-const histFilterLabel: CSSProperties = { fontSize: 13, color: "#555" };
+const histFilterLabel: CSSProperties = { fontSize: 13, color: T.textSub };
 const histFilterSelect: CSSProperties = {
   padding: "6px 10px",
   borderRadius: 8,
-  border: "1px solid #ccc",
+  border: `1px solid ${T.border}`,
   fontSize: 13,
-  background: "#fff",
+  background: T.surface,
 };
-const histFilterCount: CSSProperties = { fontSize: 13, color: "#2563eb" };
+const histFilterCount: CSSProperties = { fontSize: 13, color: T.primary };
 const pagerRow: CSSProperties = {
   display: "flex",
   alignItems: "center",
@@ -809,7 +805,7 @@ const pagerRow: CSSProperties = {
   flexWrap: "wrap",
   gap: 8,
 };
-const pagerInfo: CSSProperties = { fontSize: 13, color: "#6b7280" };
+const pagerInfo: CSSProperties = { fontSize: 13, color: T.textMuted };
 const pagerBtns: CSSProperties = {
   display: "flex",
   gap: 6,
@@ -818,20 +814,20 @@ const pagerBtns: CSSProperties = {
 const pagerSelect: CSSProperties = {
   padding: "6px 10px",
   borderRadius: 8,
-  border: "1px solid #ccc",
+  border: `1px solid ${T.border}`,
   fontSize: 13,
-  background: "#fff",
+  background: T.surface,
 };
 const pagerBtn: CSSProperties = {
   padding: "6px 14px",
-  border: "1px solid #d9dde3",
-  background: "#fff",
+  border: `1px solid ${T.border}`,
+  background: T.surface,
   borderRadius: 8,
   fontSize: 13,
   cursor: "pointer",
 };
 const sessCard: CSSProperties = {
-  border: "1px solid #e6ebf2",
+  border: `1px solid ${T.border}`,
   borderRadius: 10,
   marginBottom: 8,
   overflow: "hidden",
@@ -842,18 +838,18 @@ const sessHead: CSSProperties = {
   alignItems: "center",
   gap: 10,
   padding: "10px 14px",
-  background: "#f7f9fc",
+  background: T.surfaceAlt,
   border: "none",
   cursor: "pointer",
   fontSize: 13,
   textAlign: "left",
 };
-const sessArrow: CSSProperties = { fontSize: 11, color: "#6b7280" };
+const sessArrow: CSSProperties = { fontSize: 11, color: T.textMuted };
 const sessBy: CSSProperties = { fontSize: 13 };
-const sessMeta: CSSProperties = { color: "#6b7280", fontSize: 12, flex: 1 };
+const sessMeta: CSSProperties = { color: T.textMuted, fontSize: 12, flex: 1 };
 const sessCount: CSSProperties = {
-  background: "#e7f0ff",
-  color: "#2d6cdf",
+  background: T.primaryBg,
+  color: T.primary,
   borderRadius: 999,
   padding: "2px 10px",
   fontSize: 12,
@@ -862,7 +858,7 @@ const sessCount: CSSProperties = {
 const sessBody: CSSProperties = { padding: "4px 10px 10px" };
 const tdByCell: CSSProperties = {
   padding: "8px 10px",
-  borderBottom: "1px solid #eef0f3",
+  borderBottom: `1px solid ${T.divider}`,
   textAlign: "center",
   fontSize: 12,
 };
@@ -872,7 +868,7 @@ const byCell: CSSProperties = {
   gap: 2,
   alignItems: "center",
 };
-const byDate: CSSProperties = { fontSize: 11, color: "#9aa1a9" };
+const byDate: CSSProperties = { fontSize: 11, color: T.textFaint };
 const byList: CSSProperties = {
   display: "flex",
   flexDirection: "column",
@@ -881,7 +877,7 @@ const byList: CSSProperties = {
 };
 const wrap: CSSProperties = {
   minHeight: "100vh",
-  background: "#f4f5f7",
+  background: T.page,
   padding: "40px 16px",
   display: "flex",
   justifyContent: "center",
@@ -890,20 +886,20 @@ const wrap: CSSProperties = {
 const card: CSSProperties = {
   width: "100%",
   maxWidth: 860,
-  background: "#fff",
+  background: T.surface,
   borderRadius: 14,
   padding: 32,
   boxShadow: "0 1px 3px rgba(0,0,0,0.08)",
 };
 const back: CSSProperties = {
   fontSize: 13,
-  color: "#2d6cdf",
+  color: T.primary,
   textDecoration: "none",
 };
 const title: CSSProperties = { fontSize: 22, margin: "10px 0 8px" };
 const subtitle: CSSProperties = {
   fontSize: 14,
-  color: "#5f6873",
+  color: T.textMuted,
   lineHeight: 1.6,
   marginBottom: 16,
 };
@@ -919,27 +915,27 @@ const badgeBase: CSSProperties = {
 };
 const badgeOn: CSSProperties = {
   ...badgeBase,
-  background: "#e6f4ea",
-  color: "#1e7a3d",
+  background: T.successBg,
+  color: T.success,
 };
 const badgeOff: CSSProperties = {
   ...badgeBase,
-  background: "#fdecec",
-  color: "#b3261e",
+  background: T.dangerBg,
+  color: T.danger,
 };
 const statsRow: CSSProperties = { display: "flex", gap: 12, marginBottom: 20 };
 const stat: CSSProperties = {
   flex: 1,
-  background: "#f7f8fa",
+  background: T.surfaceAlt,
   borderRadius: 10,
   padding: "12px 8px",
   textAlign: "center",
 };
 const statN: CSSProperties = { fontSize: 22, fontWeight: 700 };
-const statL: CSSProperties = { fontSize: 12, color: "#6b7280", marginTop: 2 };
+const statL: CSSProperties = { fontSize: 12, color: T.textMuted, marginTop: 2 };
 const addBox: CSSProperties = {
-  background: "#f7f9fc",
-  border: "1px solid #e6ebf2",
+  background: T.surfaceAlt,
+  border: `1px solid ${T.border}`,
   borderRadius: 10,
   padding: 16,
   marginBottom: 20,
@@ -948,29 +944,29 @@ const addTitle: CSSProperties = {
   fontSize: 14,
   fontWeight: 700,
   marginBottom: 10,
-  color: "#374151",
+  color: T.text,
 };
 const addRow: CSSProperties = { display: "flex", gap: 8, flexWrap: "wrap" };
 const addInput: CSSProperties = {
   flex: "1 1 200px",
   padding: "9px 12px",
-  border: "1px solid #d9dde3",
+  border: `1px solid ${T.border}`,
   borderRadius: 8,
   fontSize: 14,
 };
 const addSelect: CSSProperties = {
   flex: "1 1 260px",
   padding: "9px 12px",
-  border: "1px solid #d9dde3",
+  border: `1px solid ${T.border}`,
   borderRadius: 8,
   fontSize: 13,
-  background: "#fff",
+  background: T.surface,
 };
 const addBtn: CSSProperties = {
   padding: "9px 20px",
   border: "none",
-  background: "#2d6cdf",
-  color: "#fff",
+  background: T.primary,
+  color: T.surface,
   borderRadius: 8,
   fontSize: 14,
   fontWeight: 600,
@@ -978,7 +974,7 @@ const addBtn: CSSProperties = {
 };
 const addHint: CSSProperties = {
   fontSize: 12,
-  color: "#9097a1",
+  color: T.textFaint,
   marginTop: 8,
   marginBottom: 0,
 };
@@ -986,27 +982,27 @@ const toolbar: CSSProperties = { display: "flex", gap: 8, marginBottom: 16 };
 const searchBox: CSSProperties = {
   flex: 1,
   padding: "9px 12px",
-  border: "1px solid #d9dde3",
+  border: `1px solid ${T.border}`,
   borderRadius: 8,
   fontSize: 14,
 };
 const ghostBtn: CSSProperties = {
   padding: "9px 14px",
-  border: "1px solid #d9dde3",
-  background: "#fff",
+  border: `1px solid ${T.border}`,
+  background: T.surface,
   borderRadius: 8,
   fontSize: 13,
   cursor: "pointer",
   whiteSpace: "nowrap",
 };
 const muted: CSSProperties = {
-  color: "#6b7280",
+  color: T.textMuted,
   fontSize: 14,
   padding: "20px 0",
 };
 const errBox: CSSProperties = {
-  color: "#b3261e",
-  background: "#fdecec",
+  color: T.danger,
+  background: T.dangerBg,
   padding: "12px 14px",
   borderRadius: 8,
   fontSize: 14,
@@ -1019,33 +1015,33 @@ const table: CSSProperties = {
 const th: CSSProperties = {
   textAlign: "left",
   padding: "8px 10px",
-  borderBottom: "2px solid #eceef1",
-  color: "#6b7280",
+  borderBottom: `2px solid ${T.divider}`,
+  color: T.textMuted,
   fontWeight: 600,
 };
 const thC: CSSProperties = { ...th, textAlign: "center" };
 const td: CSSProperties = {
   padding: "8px 10px",
-  borderBottom: "1px solid #f0f1f3",
+  borderBottom: `1px solid ${T.surfaceAlt}`,
   verticalAlign: "middle",
 };
-const tdCat: CSSProperties = { ...td, color: "#374151" };
+const tdCat: CSSProperties = { ...td, color: T.text };
 const tdC: CSSProperties = { ...td, textAlign: "center" };
-const dash: CSSProperties = { color: "#c0c5cc" };
+const dash: CSSProperties = { color: T.border };
 const cellInput: CSSProperties = {
   width: "100%",
   padding: "6px 8px",
-  border: "1px solid #c7ccd3",
+  border: `1px solid ${T.borderStrong}`,
   borderRadius: 6,
   fontSize: 13,
 };
 const cellSelect: CSSProperties = {
   width: "100%",
   padding: "6px 8px",
-  border: "1px solid #c7ccd3",
+  border: `1px solid ${T.borderStrong}`,
   borderRadius: 6,
   fontSize: 12,
-  background: "#fff",
+  background: T.surface,
 };
 const tagBase: CSSProperties = {
   display: "inline-block",
@@ -1056,13 +1052,13 @@ const tagBase: CSSProperties = {
 };
 const tagExpense: CSSProperties = {
   ...tagBase,
-  background: "#e7f0ff",
-  color: "#2d6cdf",
+  background: T.primaryBg,
+  color: T.primary,
 };
 const tagTravel: CSSProperties = {
   ...tagBase,
-  background: "#fff1e0",
-  color: "#c2710c",
+  background: T.warningBg,
+  color: T.warning,
 };
 const btnRow: CSSProperties = {
   display: "flex",
@@ -1071,18 +1067,18 @@ const btnRow: CSSProperties = {
 };
 const editBtn: CSSProperties = {
   padding: "5px 12px",
-  border: "1px solid #c9d4e6",
-  background: "#fff",
-  color: "#2d6cdf",
+  border: `1px solid ${T.primaryBorder}`,
+  background: T.surface,
+  color: T.primary,
   borderRadius: 7,
   fontSize: 12,
   cursor: "pointer",
 };
 const delBtn: CSSProperties = {
   padding: "5px 12px",
-  border: "1px solid #f0c2bd",
-  background: "#fff",
-  color: "#b3261e",
+  border: `1px solid ${T.dangerBorder}`,
+  background: T.surface,
+  color: T.danger,
   borderRadius: 7,
   fontSize: 12,
   cursor: "pointer",
@@ -1090,17 +1086,17 @@ const delBtn: CSSProperties = {
 const saveBtn: CSSProperties = {
   padding: "5px 12px",
   border: "none",
-  background: "#1e7a3d",
-  color: "#fff",
+  background: T.success,
+  color: T.surface,
   borderRadius: 7,
   fontSize: 12,
   cursor: "pointer",
 };
 const cancelBtn: CSSProperties = {
   padding: "5px 12px",
-  border: "1px solid #d9dde3",
-  background: "#fff",
-  color: "#6b7280",
+  border: `1px solid ${T.border}`,
+  background: T.surface,
+  color: T.textMuted,
   borderRadius: 7,
   fontSize: 12,
   cursor: "pointer",
@@ -1108,6 +1104,6 @@ const cancelBtn: CSSProperties = {
 const hint: CSSProperties = {
   marginTop: 20,
   fontSize: 12,
-  color: "#9097a1",
+  color: T.textFaint,
   lineHeight: 1.6,
 };

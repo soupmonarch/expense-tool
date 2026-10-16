@@ -1,5 +1,6 @@
 "use client";
 
+import { T } from "@/lib/theme";
 import { useEffect, useMemo, useState, type CSSProperties } from "react";
 
 interface MonthStats {
@@ -517,7 +518,7 @@ const wrap: CSSProperties = {
 const card: CSSProperties = {
   width: "100%",
   maxWidth: 720,
-  background: "#fff",
+  background: T.surface,
   borderRadius: 16,
   padding: 32,
   boxShadow: "0 4px 24px rgba(0,0,0,0.06)",
@@ -525,24 +526,24 @@ const card: CSSProperties = {
 };
 const back: CSSProperties = {
   fontSize: 13,
-  color: "#2d6cdf",
+  color: T.primary,
   textDecoration: "none",
   fontWeight: 600,
 };
 const title: CSSProperties = { fontSize: 22, margin: "12px 0 6px" };
 const subtitle: CSSProperties = {
   fontSize: 13.5,
-  color: "#5f6873",
+  color: T.textMuted,
   lineHeight: 1.6,
   marginBottom: 16,
 };
-const muted: CSSProperties = { fontSize: 13.5, color: "#8a9099" };
+const muted: CSSProperties = { fontSize: 13.5, color: T.textFaint };
 const warnBox: CSSProperties = {
   padding: "10px 12px",
   borderRadius: 8,
-  background: "#fff8e6",
-  border: "1px solid #f0dfae",
-  color: "#8a6100",
+  background: T.warningBg,
+  border: `1px solid ${T.warningBorder}`,
+  color: T.warningText,
   fontSize: 13,
   marginBottom: 12,
 };
@@ -554,15 +555,15 @@ const filterRow: CSSProperties = {
 };
 const filterLabel: CSSProperties = {
   fontSize: 13,
-  color: "#5f6873",
+  color: T.textMuted,
   fontWeight: 600,
 };
 const filterSelect: CSSProperties = {
   padding: "6px 10px",
   borderRadius: 8,
-  border: "1px solid #d7dbe0",
+  border: `1px solid ${T.border}`,
   fontSize: 13,
-  background: "#fff",
+  background: T.surface,
 };
 const tiles: CSSProperties = {
   display: "grid",
@@ -573,20 +574,20 @@ const tiles: CSSProperties = {
 const tile: CSSProperties = {
   padding: "14px 12px",
   borderRadius: 10,
-  background: "#f3f5f8",
+  background: T.surfaceAlt,
 };
 const tileN: CSSProperties = {
   fontSize: 22,
   fontWeight: 700,
-  color: "#1f2329",
+  color: T.text,
   fontVariantNumeric: "tabular-nums",
 };
-const tileL: CSSProperties = { fontSize: 12, color: "#5f6873", marginTop: 2 };
+const tileL: CSSProperties = { fontSize: 12, color: T.textMuted, marginTop: 2 };
 const section: CSSProperties = { marginTop: 28 };
-const h2: CSSProperties = { fontSize: 16, margin: "0 0 2px", color: "#1f2329" };
+const h2: CSSProperties = { fontSize: 16, margin: "0 0 2px", color: T.text };
 const hint: CSSProperties = {
   fontSize: 12,
-  color: "#8a9099",
+  color: T.textFaint,
   margin: "0 0 10px",
 };
 const jobTable: CSSProperties = {
@@ -598,16 +599,16 @@ const jobTable: CSSProperties = {
 const jobTh: CSSProperties = {
   textAlign: "left",
   padding: "6px 8px",
-  borderBottom: "2px solid #e6e8eb",
-  color: "#5f6873",
+  borderBottom: `2px solid ${T.divider}`,
+  color: T.textMuted,
   fontWeight: 600,
   whiteSpace: "nowrap",
 };
 const jobThR: CSSProperties = { ...jobTh, textAlign: "right" };
 const jobTd: CSSProperties = {
   padding: "6px 8px",
-  borderBottom: "1px solid #eef0f3",
-  color: "#3a4149",
+  borderBottom: `1px solid ${T.divider}`,
+  color: T.textSub,
   whiteSpace: "nowrap",
 };
 const jobTdR: CSSProperties = {
@@ -615,10 +616,10 @@ const jobTdR: CSSProperties = {
   textAlign: "right",
   fontVariantNumeric: "tabular-nums",
 };
-const jobOk: CSSProperties = { ...jobTd, color: "#1e874b", whiteSpace: "normal" };
+const jobOk: CSSProperties = { ...jobTd, color: T.success, whiteSpace: "normal" };
 const jobBad: CSSProperties = {
   ...jobTd,
-  color: "#c0392b",
+  color: T.danger,
   whiteSpace: "normal",
 };
 const barRow: CSSProperties = {
@@ -630,7 +631,7 @@ const barRow: CSSProperties = {
   fontSize: 12.5,
 };
 const barLabel: CSSProperties = {
-  color: "#3a4149",
+  color: T.textSub,
   overflow: "hidden",
   textOverflow: "ellipsis",
   whiteSpace: "nowrap",
@@ -639,18 +640,18 @@ const barLabelStrong: CSSProperties = { ...barLabel, fontWeight: 700 };
 const barTrack: CSSProperties = {
   display: "block",
   height: 10,
-  background: "#eef0f3",
+  background: T.divider,
   borderRadius: 4,
   overflow: "hidden",
 };
 const barFill: CSSProperties = {
   display: "block",
   height: "100%",
-  background: "#2d6cdf",
+  background: T.primary,
   borderRadius: "0 4px 4px 0",
 };
 const barValue: CSSProperties = {
-  color: "#3a4149",
+  color: T.textSub,
   whiteSpace: "nowrap",
   fontVariantNumeric: "tabular-nums",
 };

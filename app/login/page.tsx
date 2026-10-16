@@ -1,5 +1,6 @@
 "use client";
 
+import { T } from "@/lib/theme";
 import { useState, Suspense, type CSSProperties } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 
@@ -70,7 +71,7 @@ const wrap: CSSProperties = {
   display: "flex",
   alignItems: "center",
   justifyContent: "center",
-  background: "#f5f6f8",
+  background: T.page,
   padding: 24,
   fontFamily:
     "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Malgun Gothic', sans-serif",
@@ -83,35 +84,35 @@ const card: CSSProperties = {
   gap: 12,
   padding: 28,
   borderRadius: 16,
-  background: "#fff",
-  border: "1px solid #e6e8eb",
+  background: T.surface,
+  border: `1px solid ${T.divider}`,
   boxShadow: "0 4px 24px rgba(0,0,0,0.05)",
 };
 const title: CSSProperties = { fontSize: 20, margin: "0 0 2px" };
 const subtitle: CSSProperties = {
   fontSize: 13.5,
-  color: "#8a9099",
+  color: T.textFaint,
   margin: "0 0 8px",
 };
 const input: CSSProperties = {
   padding: "11px 12px",
   borderRadius: 10,
-  border: "1px solid #d7dbe0",
+  border: `1px solid ${T.border}`,
   fontSize: 14,
 };
 const errBox: CSSProperties = {
   padding: "9px 11px",
   borderRadius: 8,
-  background: "#fdecec",
-  color: "#c0392b",
+  background: T.dangerBg,
+  color: T.danger,
   fontSize: 13,
 };
 const button: CSSProperties = {
   padding: "11px 16px",
   borderRadius: 10,
   border: "none",
-  background: "#2d6cdf",
-  color: "#fff",
+  background: T.primary,
+  color: T.surface,
   fontSize: 14,
   fontWeight: 600,
   cursor: "pointer",

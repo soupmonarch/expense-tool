@@ -1,3 +1,4 @@
+import { T } from "@/lib/theme";
 import type { ReactNode, CSSProperties } from "react";
 
 export const metadata = {
@@ -9,8 +10,8 @@ const bodyStyle: CSSProperties = {
   margin: 0,
   fontFamily:
     "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Noto Sans KR', sans-serif",
-  background: "#f5f6f8",
-  color: "#1f2329",
+  background: T.page,
+  color: T.text,
 };
 
 export default function RootLayout({ children }: { children: ReactNode }) {

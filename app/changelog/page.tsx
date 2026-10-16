@@ -1,3 +1,4 @@
+import { T } from "@/lib/theme";
 import type { CSSProperties } from "react";
 import { CHANGELOG } from "@/lib/changelog";
 
@@ -41,7 +42,7 @@ const wrap: CSSProperties = {
 const card: CSSProperties = {
   width: "100%",
   maxWidth: 640,
-  background: "#fff",
+  background: T.surface,
   borderRadius: 16,
   padding: 32,
   boxShadow: "0 4px 24px rgba(0,0,0,0.06)",
@@ -49,27 +50,27 @@ const card: CSSProperties = {
 };
 const back: CSSProperties = {
   fontSize: 13,
-  color: "#2d6cdf",
+  color: T.primary,
   textDecoration: "none",
   fontWeight: 600,
 };
 const title: CSSProperties = { fontSize: 22, margin: "12px 0 6px" };
 const subtitle: CSSProperties = {
   fontSize: 13.5,
-  color: "#5f6873",
+  color: T.textMuted,
   marginBottom: 20,
 };
 const item: CSSProperties = {
   padding: "14px 0",
-  borderTop: "1px solid #eef0f3",
+  borderTop: `1px solid ${T.divider}`,
 };
 const itemLatest: CSSProperties = {
   ...item,
   padding: "14px 16px",
   borderTop: "none",
   borderRadius: 10,
-  background: "#f0f5ff",
-  border: "1px solid #c9daf8",
+  background: T.primaryBg,
+  border: `1px solid ${T.primaryBorder}`,
   marginBottom: 6,
 };
 const itemHead: CSSProperties = {
@@ -81,25 +82,25 @@ const itemHead: CSSProperties = {
 const version: CSSProperties = {
   fontSize: 15,
   fontWeight: 700,
-  color: "#1f2329",
+  color: T.text,
 };
 const latestBadge: CSSProperties = {
   fontSize: 11,
   fontWeight: 700,
-  color: "#fff",
-  background: "#2d6cdf",
+  color: T.surface,
+  background: T.primary,
   borderRadius: 6,
   padding: "2px 6px",
 };
 const date: CSSProperties = {
   marginLeft: "auto",
   fontSize: 12.5,
-  color: "#8a9099",
+  color: T.textFaint,
   fontVariantNumeric: "tabular-nums",
 };
 const list: CSSProperties = { margin: 0, paddingLeft: 18 };
 const listItem: CSSProperties = {
   fontSize: 13.5,
-  color: "#3a4149",
+  color: T.textSub,
   lineHeight: 1.7,
 };
