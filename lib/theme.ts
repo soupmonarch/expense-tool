@@ -35,6 +35,14 @@ export const T = {
   dangerBgSoft: "#fff5f4",
   dangerBorder: "#f0c2bd",
 
+  // 분류 묶음: Expense(파랑) / Travel(주황)
+  expense: "#2d6cdf",
+  expenseBg: "#eef3fd",
+  expenseBorder: "#c9daf8",
+  travel: "#c2410c",
+  travelBg: "#fff4ec",
+  travelBorder: "#fed7aa",
+
   // 영수증 읽기 방식: OCR(청록) / AI(보라)
   ocr: "#0f766e",
   ocrBg: "#e8f6f4",

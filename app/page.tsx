@@ -198,7 +198,6 @@ export default function Home() {
     {},
   );
 
-  const [reviewOpen, setReviewOpen] = useState(false);
   const [finalOpen, setFinalOpen] = useState(false);
   // 최종 검토에서 영수증 매칭 결과를 보여 주기 위한 영수증 파싱 결과
   const [receiptParsed, setReceiptParsed] = useState<ParsedReceipts | null>(
@@ -206,11 +205,8 @@ export default function Home() {
   );
   const [receiptLoading, setReceiptLoading] = useState(false);
   const [receiptErr, setReceiptErr] = useState<string | null>(null);
-  // 최종 검토에서 선택한 행과 그 영수증 미리보기
-  const [preview, setPreview] = useState<{
-    group: "expense" | "travel";
-    index: number;
-  } | null>(null);
+  // 검토 화면에서 선택한 행(id)과 그 영수증 미리보기
+  const [previewId, setPreviewId] = useState<number | null>(null);
   const [previewImgs, setPreviewImgs] = useState<string[] | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
   const inputRef = useRef<HTMLInputElement | null>(null);
@@ -501,12 +497,8 @@ export default function Home() {
         if (r.needsReview && !r.noLearn) gc[r.id] = !!r.suspectGateway;
       setGatewayChoice(gc);
 
-      if (
-        questions.length > 0 ||
-        newRows.some((r) => r.needsReview || r.aiCheck)
-      )
-        setReviewOpen(true);
-      else setFinalOpen(true); // 확인할 게 없으면 바로 최종 검토로
+      // 분류가 끝나면 바로 검토 화면(확인 필요 + 전체 목록 + 영수증)으로 간다.
+      setFinalOpen(true);
     } catch (err: any) {
       setError(err?.message || "Something went wrong");
     } finally {
@@ -578,7 +570,8 @@ export default function Home() {
     });
   }
 
-  async function applyReview() {
+  // 검토 화면에서 "다운로드"를 누를 때 학습할 항목을 공유 저장소에 저장한다.
+  async function saveLearning() {
     // Save only the rows the user chose to learn (per-item), excluding gateways
     // and unclassified. AI 자동 분류 확인 칸의 항목도 같은 규칙으로 저장한다.
     const candidates = [...reviewRows, ...aiRows];
@@ -617,8 +610,6 @@ export default function Home() {
     setRows((prev) =>
       (prev || []).map((r) => ({ ...r, needsReview: false, aiCheck: false })),
     );
-    setReviewOpen(false);
-    setFinalOpen(true); // 검토가 끝나면 마지막으로 전체를 한 번 더 보여 준다
   }
 
   // Apply confirmed cancellation choices to produce the final payload rows.
@@ -731,8 +722,8 @@ export default function Home() {
 
   const remainingReview = (rows || []).filter((r) => r.needsReview).length;
   const remainingAi = aiRows.length;
-  const hasModalContent =
-    cancelQuestions.length > 0 || reviewRows.length > 0 || aiRows.length > 0;
+  // 검토 화면 "확인 필요" 칸에 보여 줄 항목 수 (취소 확인 + 분류 확인 + AI 확인)
+  const needCount = cancelQuestions.length + reviewRows.length + aiRows.length;
 
   // 최종 검토: 실제로 엑셀에 들어갈 행(취소 선택 반영)을 Expense / Travel 로 나눈다.
   const finalPayload = finalOpen ? finalizeRows() : [];
@@ -766,27 +757,28 @@ export default function Home() {
     ? receiptMatch.expense.missingRows + receiptMatch.travel.missingRows
     : 0;
 
+  // 행 id → 엑셀 위치(Expense/Travel 몇 번째)와 붙을 영수증 조각
+  const placeById = new Map<number, { group: "expense" | "travel"; index: number }>();
+  finalExpense.forEach((p, i) => p.id !== undefined && placeById.set(p.id, { group: "expense", index: i }));
+  finalTravel.forEach((p, i) => p.id !== undefined && placeById.set(p.id, { group: "travel", index: i }));
+  const halvesOf = (id: number): Half[] | null => {
+    const at = placeById.get(id);
+    return at && receiptMatch ? receiptMatch[at.group].rowHalves[at.index] ?? null : null;
+  };
+
   // 선택한 행에 붙을 영수증 조각들 (미리보기용)
-  const previewHalves: Half[] | null =
-    preview && receiptMatch
-      ? receiptMatch[preview.group].rowHalves[preview.index] ?? null
-      : null;
+  const previewHalves: Half[] | null = previewId !== null ? halvesOf(previewId) : null;
   const previewHalvesKey = previewHalves ? JSON.stringify(previewHalves) : "";
 
-  // 최종 검토가 열리고 영수증이 있으면 첫 행을 자동으로 미리보기한다.
+  // 검토 화면이 열리고 영수증이 있으면 첫 '확인 필요' 행(없으면 첫 행)을 미리보기한다.
   useEffect(() => {
     if (!finalOpen) {
-      setPreview(null);
+      setPreviewId(null);
       return;
     }
-    if (!preview && receiptMatch) {
-      setPreview(
-        finalExpense.length > 0
-          ? { group: "expense", index: 0 }
-          : finalTravel.length > 0
-            ? { group: "travel", index: 0 }
-            : null,
-      );
+    if (previewId === null && receiptMatch) {
+      const first = [...reviewRows, ...aiRows][0]?.id ?? finalExpense[0]?.id ?? finalTravel[0]?.id;
+      setPreviewId(first ?? null);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [finalOpen, !!receiptMatch]);
@@ -832,16 +824,18 @@ export default function Home() {
 
   // 최종 검토 오른쪽(좁은 화면에서는 위쪽)의 영수증 미리보기 칸
   function renderPreviewPanel(compact: boolean) {
-    const row =
-      preview && (preview.group === "expense" ? finalExpense : finalTravel)[preview.index];
+    const row = previewId !== null ? finalPayload.find((p) => p.id === previewId) : undefined;
+    const at = previewId !== null ? placeById.get(previewId) : undefined;
     return (
       <div style={compact ? previewPanelCompact : previewPanel}>
         <div style={previewHead}>
           {row ? (
             <>
-              <b>
-                {preview!.group === "expense" ? "Expense" : "Travel"} {preview!.index + 1}
-              </b>{" "}
+              {at && (
+                <b style={{ color: at.group === "travel" ? T.travel : T.expense }}>
+                  {at.group === "travel" ? "Travel" : "Expense"} {at.index + 1}
+                </b>
+              )}{" "}
               · {row.merchant || "(가맹점명 없음)"} · {fmt(row.amount)}원
             </>
           ) : (
@@ -890,7 +884,7 @@ export default function Home() {
     return (
       <div style={finalSection}>
         <div style={finalHeader}>
-          <span>{label}</span>
+          <span style={{ color: group === "travel" ? T.travel : T.expense }}>{label}</span>
           <span>
             {fmt(list.length)}건 · <b>{fmt(sumAmount(list))}원</b>
           </span>
@@ -898,9 +892,8 @@ export default function Home() {
         {list.length === 0 && <div style={mutedText}>해당 항목 없음</div>}
         {list.map((p, i) => {
           const unclassified = !VALID_CATEGORIES.has(p.category);
-          const selected =
-            !!group && preview?.group === group && preview.index === i;
-          const clickable = !!group && !!receiptMatch;
+          const selected = p.id !== undefined && previewId === p.id;
+          const clickable = !!group && !!receiptMatch && p.id !== undefined;
           return (
             <div
               key={p.id !== undefined ? "r" + p.id : "o" + i}
@@ -909,7 +902,7 @@ export default function Home() {
                 ...(clickable ? { cursor: "pointer" } : null),
                 ...(selected ? finalRowSelected : null),
               }}
-              onClick={clickable ? () => setPreview({ group: group!, index: i }) : undefined}
+              onClick={clickable ? () => setPreviewId(p.id as number) : undefined}
             >
               <div style={finalRowTop}>
                 <span style={finalIdx}>{i + 1}</span>
@@ -948,8 +941,17 @@ export default function Home() {
   // 검토 팝업의 분류 항목 한 줄(분류 확인 / AI 자동 분류 확인 공용).
   function renderCategoryItem(r: Row) {
     const isGateway = r.source === "gateway";
+    const selected = !!receiptMatch && previewId === r.id;
     return (
-      <div key={r.id} style={reviewItem}>
+      <div
+        key={r.id}
+        style={{
+          ...reviewItem,
+          ...(receiptMatch ? { cursor: "pointer" } : null),
+          ...(selected ? reviewItemSelected : null),
+        }}
+        onClick={receiptMatch ? () => setPreviewId(r.id) : undefined}
+      >
         <div style={reviewInfo}>
           <div style={reviewMerchant}>{r.merchant || "(가맹점명 없음)"}</div>
           <div style={reviewMeta}>
@@ -1061,8 +1063,8 @@ export default function Home() {
   }
 
   // 지금 단계: ① 파일 올리기 → ② 확인 → ③ 최종 검토 → ④ 다운로드
-  const currentStep = done ? 4 : finalOpen ? 3 : rows ? 2 : 1;
-  const STEPS = ["파일 올리기", "확인", "최종 검토", "다운로드"];
+  const currentStep = done ? 3 : rows ? 2 : 1;
+  const STEPS = ["파일 올리기", "검토", "다운로드"];
 
   return (
     <main style={wrap}>
@@ -1142,9 +1144,9 @@ export default function Home() {
         <div style={modeRow}>
           {(
             [
-              ["both", "엑셀 + 영수증 (권장)"],
-              ["excel", "엑셀만"],
+              ["both", "엑셀 + 영수증"],
               ["pdf", "영수증 PDF만"],
+              ["excel", "엑셀만"],
             ] as const
           ).map(([m, label]) => (
             <button
@@ -1255,7 +1257,7 @@ export default function Home() {
               </div>
             )}
             <div style={readModeBox}>
-              <div style={readModeLabel}>글자가 없는 영수증 PDF(스캔·인쇄 PDF) 읽는 방법</div>
+              <div style={readModeLabel}>분류 방법 선택</div>
               <div style={readModeSeg} role="radiogroup" aria-label="영수증 읽는 방법">
                 <button
                   type="button"
@@ -1374,7 +1376,7 @@ export default function Home() {
                 <button
                   type="button"
                   style={linkBtn}
-                  onClick={() => setReviewOpen(true)}
+                  onClick={() => setFinalOpen(true)}
                 >
                   검토하기
                 </button>
@@ -1417,7 +1419,7 @@ export default function Home() {
             disabled={downloading}
             style={button(downloading)}
           >
-            {downloading ? "생성 중…" : "최종 검토 후 다운로드"}
+            {downloading ? "생성 중…" : "검토 후 다운로드"}
           </button>
         )}
 
@@ -1428,6 +1430,8 @@ export default function Home() {
         )}
 
         <footer style={footer}>
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src="/wechat.png" alt="WeChat" width={18} height={18} style={wechatIcon} />
           <span>
             버그·오류 제보 · {BUG_REPORT_NAME} · WeChat{" "}
             <span style={bugId}>{BUG_REPORT_WECHAT}</span>
@@ -1443,21 +1447,114 @@ export default function Home() {
         </footer>
       </div>
 
-      {reviewOpen && (
-        <div style={overlay} onClick={() => setReviewOpen(false)}>
-          <div style={modal} onClick={(e) => e.stopPropagation()}>
+      {finalOpen && rows && (
+        <div style={overlay} onClick={() => setFinalOpen(false)}>
+          <div
+            style={{
+              ...modal,
+              maxWidth: receiptMatch && !narrow ? 1080 : 640,
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
             <div style={modalStep}>2단계</div>
-            <h2 style={modalTitle}>확인이 필요한 항목</h2>
+            <h2 style={modalTitle}>검토</h2>
             <p style={modalSub}>
-              아래 항목들을 확인해 주세요. 취소·환불 여부와 분류를 정하면
-              그대로 엑셀에 반영됩니다.
+              확인 필요 항목을 정리하고 전체 목록을 확인해 주세요. 아래 내용 그대로 엑셀이 만들어져요.
+              {receiptMatch ? " 행을 누르면 붙을 영수증이 보여요." : ""}
             </p>
 
+            <div
+              style={
+                receiptMatch && !narrow
+                  ? finalBodyTwoCol
+                  : { display: "flex", flexDirection: "column", flex: 1, minHeight: 0 }
+              }
+            >
+            {receiptMatch && narrow && renderPreviewPanel(true)}
             <div style={reviewList}>
-              {!hasModalContent && (
-                <div style={mutedText}>확인할 항목이 없습니다.</div>
+              <div style={finalSummary}>
+                <div>
+                  🧾 Expense {fmt(finalExpense.length)}건 ·{" "}
+                  {fmt(sumAmount(finalExpense))}원
+                </div>
+                <div>
+                  ✈️ Travel {fmt(finalTravel.length)}건 ·{" "}
+                  {fmt(sumAmount(finalTravel))}원
+                </div>
+                <div>
+                  💳 합계 <b>{fmt(sumAmount(finalPayload))}원</b>
+                  {finalExcluded > 0
+                    ? ` · 취소·환불로 제외 ${fmt(finalExcluded)}건`
+                    : ""}
+                </div>
+                {hasReceipts && receiptLoading && (
+                  <div style={mutedText}>
+                    🧾 {progress || "영수증 PDF 분석 중… 잠시만요"}
+                  </div>
+                )}
+                {hasReceipts && receiptMatch && (
+                  <div>
+                    🧾 영수증 매칭 · Expense{" "}
+                    {fmt(receiptMatch.expense.matchedRows)}/
+                    {fmt(finalExpense.length)} · Travel{" "}
+                    {fmt(receiptMatch.travel.matchedRows)}/
+                    {fmt(finalTravel.length)}
+                    {receiptMissing === 0 ? " ✅" : ""}
+                  </div>
+                )}
+              </div>
+              {hasReceipts && receiptErr && (
+                <div style={finalWarnBox}>
+                  ⚠️ 영수증 분석 실패 — {receiptErr}
+                </div>
               )}
-
+              {hasReceipts &&
+                receiptParsed &&
+                receiptParsed.receipts.length === 0 && (
+                  <div style={finalWarnBox}>
+                    ⚠️ 영수증 PDF에서 영수증을 인식하지 못했어요. 이대로
+                    다운로드하면 영수증 PDF는 만들어지지 않아요.
+                  </div>
+                )}
+              {receiptMatch && receiptMissing > 0 && (
+                <div style={finalWarnBox}>
+                  ⚠️ 영수증을 찾지 못한 항목 {fmt(receiptMissing)}건 — 아래
+                  &apos;영수증 없음&apos; 표시를 확인하고, 빠진 영수증을 추가로
+                  첨부해 주세요.
+                </div>
+              )}
+              {receiptMatch && receiptMatch.leftover.length > 0 && (
+                <details style={leftoverBox}>
+                  <summary style={leftoverSummary}>
+                    🧾 어느 항목에도 맞지 않은 영수증{" "}
+                    {fmt(receiptMatch.leftover.length)}장 (영수증 PDF에서
+                    빠져요)
+                  </summary>
+                  {receiptMatch.leftover.map((lo, i) => (
+                    <div key={i} style={leftoverRow}>
+                      {lo.page + 1}페이지 · {lo.merchant || "(가맹점명 없음)"}
+                      {lo.amount ? ` · ${fmt(lo.amount)}원` : ""}
+                      {lo.date ? ` · ${lo.date}` : ""}
+                      {lo.canceled ? " · 취소 영수증" : ""}
+                    </div>
+                  ))}
+                </details>
+              )}
+              {finalUnclassified > 0 && (
+                <div style={finalWarnBox}>
+                  ⚠️ 미분류 {fmt(finalUnclassified)}건 — 이대로 다운로드하면
+                  Expense 파일에 UNCLASSIFIED로 들어가요. 빨간 항목의 분류를
+                  골라 주세요.
+                </div>
+              )}
+              {needCount > 0 && (
+                <div style={needBox}>
+                  <div style={needHead}>
+                    <span>확인 필요 {fmt(needCount)}건</span>
+                    <span style={{ fontSize: 12, fontWeight: 500, color: T.textMuted }}>
+                      고른 분류는 다운로드할 때 저장돼요
+                    </span>
+                  </div>
               {cancelQuestions.length > 0 && (
                 <div style={sectionLabel}>↩️ 취소·환불 확인</div>
               )}
@@ -1578,152 +1675,6 @@ export default function Home() {
                 </div>
               )}
               {aiRows.map((r) => renderCategoryItem(r))}
-            </div>
-
-            <div style={nameRow}>
-              <label style={nameLabel}>
-                작성자 이름
-                <input
-                  style={nameInput}
-                  placeholder="예: 한주드 (분류 기록에 남습니다)"
-                  value={userName}
-                  onChange={(e) => setUserName(e.target.value)}
-                />
-              </label>
-            </div>
-
-            <div style={modalActions}>
-              <button
-                type="button"
-                style={ghostBtn}
-                onClick={() => setReviewOpen(false)}
-              >
-                닫기
-              </button>
-              <button type="button" style={primaryBtn} onClick={applyReview}>
-                적용·저장 → 최종 검토
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {finalOpen && rows && (
-        <div style={overlay} onClick={() => setFinalOpen(false)}>
-          <div
-            style={{
-              ...modal,
-              maxWidth: receiptMatch && !narrow ? 1080 : 640,
-            }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div style={modalStep}>3단계</div>
-            <h2 style={modalTitle}>최종 검토</h2>
-            <p style={modalSub}>
-              아래 내용 그대로 엑셀이 만들어져요. 분류가 틀린 항목은 여기서 바로
-              바꿀 수 있어요 (이번 파일에만 반영, 학습은 안 돼요).
-              {receiptMatch ? " 행을 누르면 붙을 영수증이 보여요." : ""}
-            </p>
-
-            <div
-              style={
-                receiptMatch && !narrow
-                  ? finalBodyTwoCol
-                  : { display: "flex", flexDirection: "column", flex: 1, minHeight: 0 }
-              }
-            >
-            {receiptMatch && narrow && renderPreviewPanel(true)}
-            <div style={reviewList}>
-              <div style={finalSummary}>
-                <div>
-                  🧾 Expense {fmt(finalExpense.length)}건 ·{" "}
-                  {fmt(sumAmount(finalExpense))}원
-                </div>
-                <div>
-                  ✈️ Travel {fmt(finalTravel.length)}건 ·{" "}
-                  {fmt(sumAmount(finalTravel))}원
-                </div>
-                <div>
-                  💳 합계 <b>{fmt(sumAmount(finalPayload))}원</b>
-                  {finalExcluded > 0
-                    ? ` · 취소·환불로 제외 ${fmt(finalExcluded)}건`
-                    : ""}
-                </div>
-                {hasReceipts && receiptLoading && (
-                  <div style={mutedText}>
-                    🧾 {progress || "영수증 PDF 분석 중… 잠시만요"}
-                  </div>
-                )}
-                {hasReceipts && receiptMatch && (
-                  <div>
-                    🧾 영수증 매칭 · Expense{" "}
-                    {fmt(receiptMatch.expense.matchedRows)}/
-                    {fmt(finalExpense.length)} · Travel{" "}
-                    {fmt(receiptMatch.travel.matchedRows)}/
-                    {fmt(finalTravel.length)}
-                    {receiptMissing === 0 ? " ✅" : ""}
-                  </div>
-                )}
-              </div>
-              {hasReceipts && receiptErr && (
-                <div style={finalWarnBox}>
-                  ⚠️ 영수증 분석 실패 — {receiptErr}
-                </div>
-              )}
-              {hasReceipts &&
-                receiptParsed &&
-                receiptParsed.receipts.length === 0 && (
-                  <div style={finalWarnBox}>
-                    ⚠️ 영수증 PDF에서 영수증을 인식하지 못했어요. 이대로
-                    다운로드하면 영수증 PDF는 만들어지지 않아요.
-                  </div>
-                )}
-              {receiptMatch && receiptMissing > 0 && (
-                <div style={finalWarnBox}>
-                  ⚠️ 영수증을 찾지 못한 항목 {fmt(receiptMissing)}건 — 아래
-                  &apos;영수증 없음&apos; 표시를 확인하고, 빠진 영수증을 추가로
-                  첨부해 주세요.
-                </div>
-              )}
-              {receiptMatch && receiptMatch.leftover.length > 0 && (
-                <details style={leftoverBox}>
-                  <summary style={leftoverSummary}>
-                    🧾 어느 항목에도 맞지 않은 영수증{" "}
-                    {fmt(receiptMatch.leftover.length)}장 (영수증 PDF에서
-                    빠져요)
-                  </summary>
-                  {receiptMatch.leftover.map((lo, i) => (
-                    <div key={i} style={leftoverRow}>
-                      {lo.page + 1}페이지 · {lo.merchant || "(가맹점명 없음)"}
-                      {lo.amount ? ` · ${fmt(lo.amount)}원` : ""}
-                      {lo.date ? ` · ${lo.date}` : ""}
-                      {lo.canceled ? " · 취소 영수증" : ""}
-                    </div>
-                  ))}
-                </details>
-              )}
-              {finalUnclassified > 0 && (
-                <div style={finalWarnBox}>
-                  ⚠️ 미분류 {fmt(finalUnclassified)}건 — 이대로 다운로드하면
-                  Expense 파일에 UNCLASSIFIED로 들어가요. 빨간 항목의 분류를
-                  골라 주세요.
-                </div>
-              )}
-              {(remainingReview > 0 ||
-                remainingAi > 0 ||
-                cancelQuestions.length > 0) && (
-                <div style={finalWarnBox}>
-                  ⚠️ 아직 검토 팝업에서 적용하지 않은 항목이 있어요.{" "}
-                  <button
-                    type="button"
-                    style={linkBtn}
-                    onClick={() => {
-                      setFinalOpen(false);
-                      setReviewOpen(true);
-                    }}
-                  >
-                    검토 팝업 열기
-                  </button>
                 </div>
               )}
               {renderFinalSection(
@@ -1742,7 +1693,18 @@ export default function Home() {
             {receiptMatch && !narrow && renderPreviewPanel(false)}
             </div>
 
-            <div style={modalActions}>
+            <div style={{ ...modalActions, flexWrap: "wrap", alignItems: "center" }}>
+              {reviewRows.length + aiRows.length > 0 && (
+                <label style={nameInline}>
+                  작성자
+                  <input
+                    style={nameInputInline}
+                    placeholder="이름 (분류 기록에 남아요)"
+                    value={userName}
+                    onChange={(e) => setUserName(e.target.value)}
+                  />
+                </label>
+              )}
               <button
                 type="button"
                 style={ghostBtn}
@@ -1754,7 +1716,8 @@ export default function Home() {
                 type="button"
                 style={downloading || receiptLoading ? primaryBtnDisabled : primaryBtn}
                 disabled={downloading || receiptLoading}
-                onClick={() => {
+                onClick={async () => {
+                  await saveLearning(); // 체크된 분류를 모두에게 저장
                   setFinalOpen(false);
                   download();
                 }}
@@ -1786,7 +1749,7 @@ const card: CSSProperties = {
   padding: 32,
   boxShadow: "0 4px 24px rgba(0,0,0,0.06)",
 };
-const title: CSSProperties = { fontSize: 22, margin: "0 0 8px" };
+const title: CSSProperties = { fontSize: 22, margin: 0, letterSpacing: -0.2 };
 const subtitle: CSSProperties = {
   fontSize: 14,
   color: T.textMuted,
@@ -2244,24 +2207,30 @@ const headerRow: CSSProperties = {
   justifyContent: "space-between",
   gap: 12,
   flexWrap: "wrap",
-  marginBottom: 14,
+  rowGap: 10,
+  paddingBottom: 16,
+  marginBottom: 18,
+  borderBottom: `1px solid ${T.divider}`,
 };
-const topNav: CSSProperties = { display: "flex", gap: 4, flexWrap: "wrap" };
+const topNav: CSSProperties = { display: "flex", gap: 6, flexWrap: "wrap" };
 const topNavLink: CSSProperties = {
   fontSize: 12.5,
   fontWeight: 600,
   color: T.textMuted,
   textDecoration: "none",
-  padding: "5px 9px",
-  borderRadius: 6,
-  background: T.surfaceAlt,
+  padding: "6px 11px",
+  borderRadius: 999,
+  border: `1px solid ${T.divider}`,
+  background: T.surface,
 };
 const stepper: CSSProperties = {
   display: "flex",
   listStyle: "none",
-  padding: 0,
-  margin: "0 0 18px",
+  padding: "12px 14px",
+  margin: "0 0 22px",
   gap: 0,
+  background: T.surfaceAlt,
+  borderRadius: T.radius,
 };
 const stepItem: CSSProperties = {
   flex: 1,
@@ -2312,6 +2281,7 @@ const footer: CSSProperties = {
   fontSize: 12,
   color: T.textFaint,
 };
+const wechatIcon: CSSProperties = { borderRadius: 4, flexShrink: 0 };
 const versionInline: CSSProperties = { marginLeft: "auto", color: T.textFaint };
 const readModeBox: CSSProperties = { margin: "10px 0 14px" };
 const readModeLabel: CSSProperties = {
@@ -2374,6 +2344,46 @@ const readModeHintAi: CSSProperties = {
   background: T.aiBg,
   color: T.ai,
   border: `1px solid ${T.aiBorder}`,
+};
+const nameInline: CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 6,
+  marginRight: "auto",
+  fontSize: 12.5,
+  fontWeight: 600,
+  color: T.textMuted,
+};
+const nameInputInline: CSSProperties = {
+  padding: "8px 10px",
+  borderRadius: T.radiusSm,
+  border: `1px solid ${T.border}`,
+  fontSize: 13,
+  width: 190,
+};
+const reviewItemSelected: CSSProperties = {
+  background: T.primaryBg,
+  boxShadow: `inset 3px 0 0 ${T.primary}`,
+  paddingLeft: 10,
+  paddingRight: 6,
+  borderRadius: 6,
+};
+const needBox: CSSProperties = {
+  border: `1px solid ${T.warningBorder}`,
+  background: T.surface,
+  borderRadius: T.radius,
+  padding: "4px 12px 8px",
+  marginBottom: 12,
+};
+const needHead: CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "space-between",
+  gap: 8,
+  padding: "8px 0 4px",
+  fontSize: 14,
+  fontWeight: 700,
+  color: T.warningText,
 };
 const modalStep: CSSProperties = {
   fontSize: 11.5,

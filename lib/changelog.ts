@@ -10,6 +10,17 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.8.0",
+    date: "2026-10-16",
+    changes: [
+      "검토 화면 하나로 통합 — '확인 필요'(취소·분류·AI 확인)와 전체 목록, 영수증 미리보기를 한 화면에서. 단계도 3단계(파일 올리기 → 검토 → 다운로드)로",
+      "고른 분류는 다운로드할 때 모두에게 저장돼요",
+      "분류 선택 목록을 Expense(파랑) / Travel(주황) 두 칸으로 나눠 구분이 쉬워졌어요",
+      "분류 방식 순서 변경(엑셀 + 영수증 / 영수증 PDF만 / 엑셀만), '분류 방법 선택'으로 문구 단순화",
+      "타이틀·메뉴·진행 단계 간격 정리, 버그 제보에 WeChat 아이콘",
+    ],
+  },
+  {
     version: "2.7.0",
     date: "2026-10-16",
     changes: [
