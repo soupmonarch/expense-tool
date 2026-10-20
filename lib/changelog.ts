@@ -10,6 +10,15 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.10.0",
+    date: "2026-10-20",
+    changes: [
+      "이용 기록과 분류 기록을 하나로 — 다운로드 한 줄 안에 그때 저장한 분류가 함께 보여요",
+      "이용 기록에 이름·IP·기기·처리 항목을 관리 목적으로 저장 (화면 아래에 안내 표시)",
+      "같은 가맹점이 여러 건이어도 분류 저장 기록은 한 번만 남아요",
+    ],
+  },
+  {
     version: "2.9.0",
     date: "2026-10-20",
     changes: [

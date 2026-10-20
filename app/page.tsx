@@ -30,6 +30,7 @@ import type { ParsedReceipts } from "@/lib/parseReceipts";
 import { matchReceipts, type Half, type RowMeta } from "@/lib/buildReceiptPdf";
 import { normalizeMerchant } from "@/lib/normalize";
 import CategoryPicker from "@/components/CategoryPicker";
+import { getDeviceId } from "@/lib/clientId";
 
 interface Row {
   id: number;
@@ -595,7 +596,8 @@ export default function Home() {
     // PSP로 표시한 가맹점은 결제대행사로 학습(카테고리 학습 제외).
     const gateways = candidates
       .filter((r) => !r.noLearn && gatewayChoice[r.id])
-      .map((r) => r.merchant);
+      .map((r) => r.merchant)
+      .filter((m, i, a) => a.findIndex((x) => normalizeMerchant(x) === normalizeMerchant(m)) === i);
     // 카테고리 학습은 PSP로 표시하지 않은 행에만 적용한다.
     const items = candidates
       .filter(
@@ -606,7 +608,9 @@ export default function Home() {
           r.category &&
           r.category !== UNCLASSIFIED,
       )
-      .map((r) => ({ merchant: r.merchant, category: r.category }));
+      .map((r) => ({ merchant: r.merchant, category: r.category }))
+      // 같은 가맹점이 여러 건이면 한 번만 저장한다 (기록이 중복으로 쌓이지 않게)
+      .filter((it, i, a) => a.findIndex((x) => normalizeMerchant(x.merchant) === normalizeMerchant(it.merchant)) === i);
     if (items.length > 0 || gateways.length > 0) {
       try {
         localStorage.setItem("expense_tool_user_name", by);
@@ -617,7 +621,7 @@ export default function Home() {
         await fetch("/api/learn", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ items, gateways, by }),
+          body: JSON.stringify({ items, gateways, by, device: getDeviceId() }),
         });
       } catch {
         /* non-fatal: still let the user download */
@@ -705,7 +709,7 @@ export default function Home() {
       const res = await fetch("/api/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ rows: payload, batchId, receipt, by, mode }),
+        body: JSON.stringify({ rows: payload, batchId, receipt, by, mode, device: getDeviceId() }),
       });
       if (!res.ok) {
         let msg = `Failed (${res.status})`;
@@ -1460,7 +1464,16 @@ export default function Home() {
           >
             {wechatCopied ? "복사됨 ✓" : "ID 복사"}
           </button>
-          <span style={versionInline}>v{APP_VERSION}</span>
+          <span
+            style={versionInline}
+            onDoubleClick={() => (window.location.href = "/admin")}
+            title=""
+          >
+            v{APP_VERSION}
+          </span>
+          <span style={privacyNote}>
+            이용 기록(이름·IP·처리 내역)은 관리 목적으로 저장돼요.
+          </span>
         </footer>
       </div>
 
@@ -2298,7 +2311,12 @@ const footer: CSSProperties = {
   color: T.textFaint,
 };
 const wechatIcon: CSSProperties = { borderRadius: 4, flexShrink: 0 };
-const versionInline: CSSProperties = { marginLeft: "auto", color: T.textFaint };
+const versionInline: CSSProperties = {
+  marginLeft: "auto",
+  color: T.textFaint,
+  userSelect: "none",
+};
+const privacyNote: CSSProperties = { width: "100%", fontSize: 11, color: T.textFaint };
 const readModeBox: CSSProperties = { margin: "10px 0 14px" };
 const readModeLabel: CSSProperties = {
   fontSize: 12,

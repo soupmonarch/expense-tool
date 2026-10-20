@@ -167,7 +167,9 @@ export interface HistoryEntry {
   category: string; // 확정 분류 (또는 "__GATEWAY__")
   by: string; // 작성자 이름 (빈 값이면 UI에서 '익명' 처리)
   at: string; // ISO 타임스탬프
-  source?: string; // "review" | "manual" | "gateway" 등
+  source?: string; // "review" | "manual" | "gateway" | "delete" 등
+  ip?: string; // 접속 IP (v2.10.0~, 관리자 메뉴용)
+  device?: string; // 브라우저 기기 ID (v2.10.0~)
 }
 
 // 분류 기록 한 건을 추가한다. 저장 실패해도 양식 생성 흐름을 막지 않도록 조용히 실패한다.
@@ -181,6 +183,8 @@ export async function appendHistory(
     by: (entry.by || "").trim(),
     at: entry.at || new Date().toISOString(),
     source: entry.source,
+    ...(entry.ip ? { ip: entry.ip } : {}),
+    ...(entry.device ? { device: entry.device } : {}),
   };
   if (!e.key) return;
   if (kvEnabled()) {
@@ -197,7 +201,9 @@ export async function appendHistory(
 }
 
 // ---------------------------------------------------------------------------
-// 사용 통계 (두 가지를 저장한다. 가맹점명·사람 이름·승인번호 원문은 저장하지 않는다)
+// 사용 통계·이용 기록 (두 가지를 저장한다)
+//  ※ v2.10.0 부터 작업 요약에 이름·IP·기기 ID·결제 항목(날짜·가맹점·금액·분류)도 남긴다.
+//    이 상세 정보는 관리자 메뉴에서만 보여 주고, 공개 화면(이용 기록·통계)에는 내보내지 않는다.
 //
 //  1) 작업(batch) 요약 — USAGE_HASH, 키 = batchId
 //     다운로드할 때마다 그 작업의 건수·금액과 영수증 인식 결과를 남긴다.
@@ -228,11 +234,22 @@ export interface ReceiptStat {
   error?: string; // 파싱 오류 메시지
 }
 
+export interface UsageItem {
+  d: string; // 결제일
+  m: string; // 가맹점
+  a: number; // 금액(원)
+  c: string; // 분류
+}
+
 export interface UsageSummary {
   v?: number; // 2 = v2.4.0 이후 형식
   at: string; // ISO 타임스탬프 (다운로드 시각)
   by?: string; // 다운로드한 사람 이름 (이용 기록용, v2.9.0~)
   mode?: string; // 분류 방식: both | pdf | excel (v2.9.0~)
+  ip?: string; // 접속 IP (v2.10.0~, 관리자 전용)
+  device?: string; // 브라우저 기기 ID (v2.10.0~)
+  ua?: string; // 기기 요약 예: "Windows · Edge" (v2.10.0~)
+  items?: UsageItem[]; // 결제 항목 (v2.10.0~, 관리자 전용)
   rows: number;
   amount: number;
   receipt?: ReceiptStat;

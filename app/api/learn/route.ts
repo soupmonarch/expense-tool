@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { clientInfo, cleanDeviceId } from "@/lib/requestInfo";
 import {
   saveLearned,
   deleteLearned,
@@ -66,6 +67,7 @@ export async function POST(req: NextRequest) {
       gateways?: string[];
       by?: string;
     };
+    const who = { ip: clientInfo(req).ip, device: cleanDeviceId((body as any)?.device) };
     const items = Array.isArray(body.items) ? body.items : [];
     const gateways = Array.isArray(body.gateways) ? body.gateways : [];
     const by = (body.by || "").trim();
@@ -82,6 +84,7 @@ export async function POST(req: NextRequest) {
       }
       await saveLearned(it.merchant, it.category);
       await appendHistory({
+      ...who,
         merchant: it.merchant,
         category: it.category,
         by,
@@ -97,6 +100,7 @@ export async function POST(req: NextRequest) {
       if (!name) continue;
       await saveLearnedGateway(name);
       await appendHistory({
+      ...who,
         merchant: name,
         category: PSP_MARK,
         by,
@@ -131,6 +135,7 @@ export async function PUT(req: NextRequest) {
       category?: string;
       by?: string;
     };
+    const who = { ip: clientInfo(req).ip, device: cleanDeviceId((body as any)?.device) };
     const merchant = (body.merchant || "").trim();
     const category = (body.category || "").trim();
     const by = (body.by || "").trim();
@@ -152,6 +157,7 @@ export async function PUT(req: NextRequest) {
       }
       await saveLearnedGateway(merchant);
       await appendHistory({
+      ...who,
         merchant,
         category: PSP_MARK,
         by,
@@ -204,6 +210,7 @@ export async function DELETE(req: NextRequest) {
       kind?: string;
       by?: string;
     };
+    const who = { ip: clientInfo(req).ip, device: cleanDeviceId((body as any)?.device) };
     if (!body?.merchant) {
       return NextResponse.json(
         { error: "merchant is required" },
@@ -218,6 +225,7 @@ export async function DELETE(req: NextRequest) {
     }
     // 누가 언제 무엇을 지웠는지 분류 기록에 남긴다.
     await appendHistory({
+      ...who,
       merchant: body.merchant,
       category: isGateway ? DELETED_GATEWAY_MARK : DELETED_MARK,
       by: (body.by || "").trim(),

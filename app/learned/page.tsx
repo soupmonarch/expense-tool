@@ -2,6 +2,7 @@
 
 import { T } from "@/lib/theme";
 import CategoryPicker from "@/components/CategoryPicker";
+import { getDeviceId } from "@/lib/clientId";
 import { categoryLabel } from "@/lib/categoryLabels";
 import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import { EXPENSE_CATEGORIES, TRAVEL_CATEGORIES } from "@/lib/categories";
@@ -18,19 +19,24 @@ interface Entry {
   group: string;
 }
 
-interface UsageEntry {
+interface SaveItem {
+  merchant: string;
+  category: string;
+  source?: string;
   at: string;
-  by: string;
-  mode: string;
-  rows: number;
-  receipt: {
-    pages: number;
-    recognized: number;
-    matched: number;
-    missing: number;
-    method: string;
-  } | null;
 }
+
+type UsageEntry =
+  | {
+      type: "download";
+      at: string;
+      by: string;
+      mode: string;
+      rows: number;
+      receipt: { pages: number; recognized: number; matched: number; method: string } | null;
+      saves: SaveItem[];
+    }
+  | { type: "edit"; at: string; by: string; items: SaveItem[] };
 
 const MODE_LABEL: Record<string, string> = {
   both: "엑셀 + 영수증",
@@ -268,6 +274,7 @@ export default function LearnedPage() {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          device: getDeviceId(),
           merchant,
           category: addCategory,
           by: userName.trim(),
@@ -303,6 +310,7 @@ export default function LearnedPage() {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          device: getDeviceId(),
           oldMerchant,
           merchant,
           category: editCategory,
@@ -352,7 +360,7 @@ export default function LearnedPage() {
       const res = await fetch("/api/learn", {
         method: "DELETE",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ merchant, by }),
+        body: JSON.stringify({ merchant, by, device: getDeviceId() }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error || "삭제 실패");
@@ -380,6 +388,7 @@ export default function LearnedPage() {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          device: getDeviceId(),
           oldMerchant: merchant,
           merchant,
           category: PSP_MARK,
@@ -409,7 +418,7 @@ export default function LearnedPage() {
       const res = await fetch("/api/learn", {
         method: "DELETE",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ merchant, kind: "gateway", by }),
+        body: JSON.stringify({ merchant, kind: "gateway", by, device: getDeviceId() }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error || "삭제 실패");
@@ -733,8 +742,9 @@ export default function LearnedPage() {
         <div style={histWrap}>
           <h2 style={gwTitle}>📒 이용 기록 · 최근 {usage.length}건</h2>
           <p style={subtitle}>
-            엑셀을 다운로드할 때마다 누가·언제·어떤 방식으로 몇 건을 처리했는지
-            남아요 (최신순). 직원별 사용 금액은 남기지 않아요.
+            다운로드할 때마다 누가·언제·어떤 방식으로 몇 건을 처리했는지, 그때
+            저장한 분류까지 함께 남아요 (최신순). 학습 데이터를 직접 고친 기록도
+            여기에 나와요. 줄을 누르면 저장한 분류가 펼쳐져요.
           </p>
           {usageAuthors.length > 0 && (
             <div style={histFilterRow}>
@@ -765,111 +775,38 @@ export default function LearnedPage() {
             <p style={muted}>아직 이용 기록이 없습니다.</p>
           ) : (
             <>
-              <table style={table}>
-                <thead>
-                  <tr>
-                    <th style={th}>일시</th>
-                    <th style={th}>이름</th>
-                    <th style={th}>방식</th>
-                    <th style={thC}>건수</th>
-                    <th style={th}>영수증</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {visibleUsage.slice(0, usageShown).map((u) => (
-                    <tr key={u.at}>
-                      <td style={td}>{fmtAt(u.at)}</td>
-                      <td style={td}>
-                        {u.by ? <b>{u.by}</b> : <span style={{ color: T.textFaint }}>이름 없음</span>}
-                      </td>
-                      <td style={td}>{MODE_LABEL[u.mode] || <span style={dash}>—</span>}</td>
-                      <td style={tdC}>{u.rows}건</td>
-                      <td style={td}>
-                        {u.receipt ? (
-                          <span>
-                            {u.receipt.matched}/{u.rows} 매칭
-                            <span style={byDate}>
-                              {" "}
-                              · {METHOD_LABEL[u.receipt.method] || ""}
-                            </span>
-                          </span>
-                        ) : (
-                          <span style={dash}>—</span>
-                        )}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-              {visibleUsage.length > usageShown && (
-                <button
-                  style={{ ...ghostBtn, marginTop: 10 }}
-                  onClick={() => setUsageShown((n) => n + 30)}
-                >
-                  더 보기 ({visibleUsage.length - usageShown}건 남음)
-                </button>
-              )}
-              <p style={{ ...muted, fontSize: 12, marginTop: 8 }}>
-                v2.9.0 이전 기록에는 이름과 방식이 남아 있지 않아요.
-              </p>
-            </>
-          )}
-        </div>
-
-        <details style={histWrap}>
-          <summary style={histSummary}>
-            📜 분류 저장 기록 · 최근 {history.length}건{" "}
-            <span style={{ fontWeight: 400, color: T.textFaint, fontSize: 13 }}>
-              (학습 데이터를 저장·수정·삭제한 기록)
-            </span>
-          </summary>
-          <p style={subtitle}>
-            같은 사람이 30분 이내에 연속으로 분류한 기록을 한 묶음으로 보여줍니다
-            (최신순). 묶음을 클릭하면 상세 분류 내역이 펼쳐집니다.
-          </p>
-          {historyAuthors.length > 0 && (
-            <div style={histFilterRow}>
-              <label style={histFilterLabel}>분류자별 보기</label>
-              <select
-                style={histFilterSelect}
-                value={historyBy}
-                onChange={(e) => setHistoryBy(e.target.value)}
-              >
-                <option value="">전체 ({history.length}건)</option>
-                {historyAuthors.map((name) => (
-                  <option key={name} value={name}>
-                    {name}
-                  </option>
-                ))}
-              </select>
-              {historyBy ? (
-                <span style={histFilterCount}>
-                  {historyBy} · {visibleHistory.length}건
-                </span>
-              ) : null}
-            </div>
-          )}
-          {history.length === 0 ? (
-            <p style={muted}>아직 기록이 없습니다.</p>
-          ) : (
-            <div>
-              {visibleSessions.map((s) => {
-                const open = openSession === s.id;
+              {visibleUsage.slice(0, usageShown).map((u, idx) => {
+                const id = u.at + "_" + idx;
+                const items = u.type === "download" ? u.saves : u.items;
+                const open = openSession === id;
                 return (
-                  <div key={s.id} style={sessCard}>
+                  <div key={id} style={sessCard}>
                     <button
-                      style={sessHead}
-                      onClick={() => setOpenSession(open ? null : s.id)}
+                      style={{ ...sessHead, cursor: items.length ? "pointer" : "default" }}
+                      onClick={() => items.length && setOpenSession(open ? null : id)}
                     >
-                      <span style={sessArrow}>{open ? "▼" : "▶"}</span>
-                      <b style={sessBy}>{s.by}</b>
-                      <span style={sessMeta}>
-                        {fmtAt(s.oldest)}
-                        {s.oldest !== s.newest ? " ~ " + fmtAt(s.newest) : ""}
+                      <span style={sessArrow}>{items.length ? (open ? "▼" : "▶") : "·"}</span>
+                      <span style={sessMeta}>{fmtAt(u.at)}</span>
+                      {u.by ? (
+                        <b style={sessBy}>{u.by}</b>
+                      ) : (
+                        <span style={{ ...sessBy, color: T.textFaint, fontWeight: 400 }}>이름 없음</span>
+                      )}
+                      {u.type === "download" ? (
+                        <span style={usageDesc}>
+                          다운로드 · {MODE_LABEL[u.mode] || "방식 기록 없음"} · {u.rows}건
+                          {u.receipt
+                            ? ` · 영수증 ${u.receipt.matched}/${u.rows} 매칭(${METHOD_LABEL[u.receipt.method] || ""})`
+                            : ""}
+                        </span>
+                      ) : (
+                        <span style={usageDesc}>학습 데이터 직접 수정</span>
+                      )}
+                      <span style={sessCount}>
+                        {items.length ? `분류 저장 ${items.length}건` : ""}
                       </span>
-                      <span style={sessCount}>{s.items.length}건</span>
                     </button>
-                    {open && (
+                    {open && items.length > 0 && (
                       <div style={sessBody}>
                         <table style={table}>
                           <thead>
@@ -880,13 +817,11 @@ export default function LearnedPage() {
                             </tr>
                           </thead>
                           <tbody>
-                            {s.items.map((h, i) => (
+                            {items.map((h, i) => (
                               <tr key={h.at + "_" + i}>
                                 <td style={td}>{fmtAt(h.at)}</td>
                                 <td style={td}>{h.merchant}</td>
-                                <td style={tdCat}>
-                                  {historyLabel(h.category)}
-                                </td>
+                                <td style={tdCat}>{historyLabel(h.category)}</td>
                               </tr>
                             ))}
                           </tbody>
@@ -896,9 +831,21 @@ export default function LearnedPage() {
                   </div>
                 );
               })}
-            </div>
+              {visibleUsage.length > usageShown && (
+                <button
+                  style={{ ...ghostBtn, marginTop: 10 }}
+                  onClick={() => setUsageShown((n) => n + 30)}
+                >
+                  더 보기 ({visibleUsage.length - usageShown}건 남음)
+                </button>
+              )}
+              <p style={{ ...muted, fontSize: 12, marginTop: 8 }}>
+                v2.9.0 이전 다운로드에는 이름·방식이 남아 있지 않아요. 금액·IP 등
+                자세한 내역은 관리자만 볼 수 있어요.
+              </p>
+            </>
           )}
-        </details>
+        </div>
 
         <p style={hint}>
           수정은 분류뿐 아니라 가맹점명도 바꿀 수 있습니다(이름을 바꿀 경우 기존
@@ -913,6 +860,13 @@ export default function LearnedPage() {
 }
 
 const histWrap: CSSProperties = { marginTop: 28 };
+const usageDesc: CSSProperties = {
+  flex: 1,
+  minWidth: 0,
+  fontSize: 13,
+  color: T.textSub,
+  textAlign: "left",
+};
 const histSummary: CSSProperties = {
   cursor: "pointer",
   fontSize: 16,
