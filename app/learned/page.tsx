@@ -18,6 +18,27 @@ interface Entry {
   group: string;
 }
 
+interface UsageEntry {
+  at: string;
+  by: string;
+  mode: string;
+  rows: number;
+  receipt: {
+    pages: number;
+    recognized: number;
+    matched: number;
+    missing: number;
+    method: string;
+  } | null;
+}
+
+const MODE_LABEL: Record<string, string> = {
+  both: "엑셀 + 영수증",
+  pdf: "영수증 PDF만",
+  excel: "엑셀만",
+};
+const METHOD_LABEL: Record<string, string> = { ai: "AI", ocr: "OCR", text: "텍스트" };
+
 interface HistoryItem {
   key: string;
   merchant: string;
@@ -84,6 +105,10 @@ export default function LearnedPage() {
   const [persistent, setPersistent] = useState(false);
   const [q, setQ] = useState("");
   const [historyBy, setHistoryBy] = useState("");
+  // 이용 기록 (다운로드할 때마다 남는 기록)
+  const [usage, setUsage] = useState<UsageEntry[]>([]);
+  const [usageBy, setUsageBy] = useState("");
+  const [usageShown, setUsageShown] = useState(20);
   // 학습 데이터 페이지네이션
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
@@ -105,13 +130,18 @@ export default function LearnedPage() {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch("/api/learn", { cache: "no-store" });
+      const [res, usageRes] = await Promise.all([
+        fetch("/api/learn", { cache: "no-store" }),
+        fetch("/api/usage-log", { cache: "no-store" }),
+      ]);
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error || "불러오기 실패");
       setEntries(data.entries || []);
       setGateways(data.gateways || []);
       setHistory(data.history || []);
       setPersistent(!!data.persistent);
+      const usageData = await usageRes.json().catch(() => ({}));
+      if (usageRes.ok) setUsage(usageData.entries || []);
     } catch (e: any) {
       setError(e?.message || "불러오기 실패");
     } finally {
@@ -161,6 +191,17 @@ export default function LearnedPage() {
   }, [history]);
 
   // 분류 기록에 등장한 작성자 목록(중복 제거, 가나다순).
+  // 이용 기록: 사용자 목록(가나다순)과 선택한 사용자의 기록
+  const usageAuthors = useMemo(() => {
+    const set = new Set<string>();
+    for (const u of usage) set.add(u.by || "이름 없음");
+    return Array.from(set).sort((a, b) => a.localeCompare(b, "ko"));
+  }, [usage]);
+  const visibleUsage = useMemo(
+    () => (usageBy ? usage.filter((u) => (u.by || "이름 없음") === usageBy) : usage),
+    [usage, usageBy],
+  );
+
   const historyAuthors = useMemo(() => {
     const set = new Set<string>();
     for (const h of history)
@@ -690,7 +731,98 @@ export default function LearnedPage() {
         </div>
 
         <div style={histWrap}>
-          <h2 style={gwTitle}>📜 분류 기록 · 최근 {history.length}건</h2>
+          <h2 style={gwTitle}>📒 이용 기록 · 최근 {usage.length}건</h2>
+          <p style={subtitle}>
+            엑셀을 다운로드할 때마다 누가·언제·어떤 방식으로 몇 건을 처리했는지
+            남아요 (최신순). 직원별 사용 금액은 남기지 않아요.
+          </p>
+          {usageAuthors.length > 0 && (
+            <div style={histFilterRow}>
+              <label style={histFilterLabel}>사용자별 보기</label>
+              <select
+                style={histFilterSelect}
+                value={usageBy}
+                onChange={(e) => {
+                  setUsageBy(e.target.value);
+                  setUsageShown(20);
+                }}
+              >
+                <option value="">전체 ({usage.length}건)</option>
+                {usageAuthors.map((name) => (
+                  <option key={name} value={name}>
+                    {name}
+                  </option>
+                ))}
+              </select>
+              {usageBy ? (
+                <span style={histFilterCount}>
+                  {usageBy} · {visibleUsage.length}건
+                </span>
+              ) : null}
+            </div>
+          )}
+          {usage.length === 0 ? (
+            <p style={muted}>아직 이용 기록이 없습니다.</p>
+          ) : (
+            <>
+              <table style={table}>
+                <thead>
+                  <tr>
+                    <th style={th}>일시</th>
+                    <th style={th}>이름</th>
+                    <th style={th}>방식</th>
+                    <th style={thC}>건수</th>
+                    <th style={th}>영수증</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {visibleUsage.slice(0, usageShown).map((u) => (
+                    <tr key={u.at}>
+                      <td style={td}>{fmtAt(u.at)}</td>
+                      <td style={td}>
+                        {u.by ? <b>{u.by}</b> : <span style={{ color: T.textFaint }}>이름 없음</span>}
+                      </td>
+                      <td style={td}>{MODE_LABEL[u.mode] || <span style={dash}>—</span>}</td>
+                      <td style={tdC}>{u.rows}건</td>
+                      <td style={td}>
+                        {u.receipt ? (
+                          <span>
+                            {u.receipt.matched}/{u.rows} 매칭
+                            <span style={byDate}>
+                              {" "}
+                              · {METHOD_LABEL[u.receipt.method] || ""}
+                            </span>
+                          </span>
+                        ) : (
+                          <span style={dash}>—</span>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              {visibleUsage.length > usageShown && (
+                <button
+                  style={{ ...ghostBtn, marginTop: 10 }}
+                  onClick={() => setUsageShown((n) => n + 30)}
+                >
+                  더 보기 ({visibleUsage.length - usageShown}건 남음)
+                </button>
+              )}
+              <p style={{ ...muted, fontSize: 12, marginTop: 8 }}>
+                v2.9.0 이전 기록에는 이름과 방식이 남아 있지 않아요.
+              </p>
+            </>
+          )}
+        </div>
+
+        <details style={histWrap}>
+          <summary style={histSummary}>
+            📜 분류 저장 기록 · 최근 {history.length}건{" "}
+            <span style={{ fontWeight: 400, color: T.textFaint, fontSize: 13 }}>
+              (학습 데이터를 저장·수정·삭제한 기록)
+            </span>
+          </summary>
           <p style={subtitle}>
             같은 사람이 30분 이내에 연속으로 분류한 기록을 한 묶음으로 보여줍니다
             (최신순). 묶음을 클릭하면 상세 분류 내역이 펼쳐집니다.
@@ -766,7 +898,7 @@ export default function LearnedPage() {
               })}
             </div>
           )}
-        </div>
+        </details>
 
         <p style={hint}>
           수정은 분류뿐 아니라 가맹점명도 바꿀 수 있습니다(이름을 바꿀 경우 기존
@@ -781,6 +913,13 @@ export default function LearnedPage() {
 }
 
 const histWrap: CSSProperties = { marginTop: 28 };
+const histSummary: CSSProperties = {
+  cursor: "pointer",
+  fontSize: 16,
+  fontWeight: 700,
+  color: T.text,
+  padding: "6px 0",
+};
 const histFilterRow: CSSProperties = {
   display: "flex",
   alignItems: "center",

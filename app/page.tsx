@@ -570,8 +570,25 @@ export default function Home() {
     });
   }
 
+  // 이용 기록에 남길 이름. 비어 있으면 한 번 물어보고 브라우저에 기억한다.
+  function ensureUserName(): string {
+    let name = userName.trim();
+    if (!name) {
+      name = (window.prompt("이용 기록에 남길 이름을 입력해 주세요.") || "").trim().slice(0, 40);
+      if (name) setUserName(name);
+    }
+    if (name) {
+      try {
+        localStorage.setItem("expense_tool_user_name", name);
+      } catch {
+        /* ignore */
+      }
+    }
+    return name;
+  }
+
   // 검토 화면에서 "다운로드"를 누를 때 학습할 항목을 공유 저장소에 저장한다.
-  async function saveLearning() {
+  async function saveLearning(by: string = userName.trim()) {
     // Save only the rows the user chose to learn (per-item), excluding gateways
     // and unclassified. AI 자동 분류 확인 칸의 항목도 같은 규칙으로 저장한다.
     const candidates = [...reviewRows, ...aiRows];
@@ -592,7 +609,7 @@ export default function Home() {
       .map((r) => ({ merchant: r.merchant, category: r.category }));
     if (items.length > 0 || gateways.length > 0) {
       try {
-        localStorage.setItem("expense_tool_user_name", userName.trim());
+        localStorage.setItem("expense_tool_user_name", by);
       } catch {
         /* ignore */
       }
@@ -600,7 +617,7 @@ export default function Home() {
         await fetch("/api/learn", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ items, gateways, by: userName.trim() }),
+          body: JSON.stringify({ items, gateways, by }),
         });
       } catch {
         /* non-fatal: still let the user download */
@@ -670,7 +687,7 @@ export default function Home() {
     return out;
   }
 
-  async function download() {
+  async function download(by: string = userName.trim()) {
     if (!rows) return;
     setDownloading(true);
     setError(null);
@@ -688,7 +705,7 @@ export default function Home() {
       const res = await fetch("/api/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ rows: payload, batchId, receipt }),
+        body: JSON.stringify({ rows: payload, batchId, receipt, by, mode }),
       });
       if (!res.ok) {
         let msg = `Failed (${res.status})`;
@@ -1694,17 +1711,15 @@ export default function Home() {
             </div>
 
             <div style={{ ...modalActions, flexWrap: "wrap", alignItems: "center" }}>
-              {reviewRows.length + aiRows.length > 0 && (
-                <label style={nameInline}>
-                  작성자
-                  <input
-                    style={nameInputInline}
-                    placeholder="이름 (분류 기록에 남아요)"
-                    value={userName}
-                    onChange={(e) => setUserName(e.target.value)}
-                  />
-                </label>
-              )}
+              <label style={nameInline}>
+                이름
+                <input
+                  style={nameInputInline}
+                  placeholder="이용 기록에 남을 이름"
+                  value={userName}
+                  onChange={(e) => setUserName(e.target.value)}
+                />
+              </label>
               <button
                 type="button"
                 style={ghostBtn}
@@ -1717,9 +1732,10 @@ export default function Home() {
                 style={downloading || receiptLoading ? primaryBtnDisabled : primaryBtn}
                 disabled={downloading || receiptLoading}
                 onClick={async () => {
-                  await saveLearning(); // 체크된 분류를 모두에게 저장
+                  const by = ensureUserName(); // 이용 기록에 남을 이름 (비어 있으면 한 번 물어봄)
+                  await saveLearning(by); // 체크된 분류를 모두에게 저장
                   setFinalOpen(false);
-                  download();
+                  download(by);
                 }}
               >
                 {mode !== "excel" && receiptFiles.length > 0

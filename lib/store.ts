@@ -231,6 +231,8 @@ export interface ReceiptStat {
 export interface UsageSummary {
   v?: number; // 2 = v2.4.0 이후 형식
   at: string; // ISO 타임스탬프 (다운로드 시각)
+  by?: string; // 다운로드한 사람 이름 (이용 기록용, v2.9.0~)
+  mode?: string; // 분류 방식: both | pdf | excel (v2.9.0~)
   rows: number;
   amount: number;
   receipt?: ReceiptStat;

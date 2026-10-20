@@ -10,6 +10,15 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.9.0",
+    date: "2026-10-20",
+    changes: [
+      "📒 이용 기록 추가 — 다운로드할 때마다 누가·언제·어떤 방식으로 몇 건을 처리했는지 남아요 (학습 데이터 관리 화면, 금액은 남기지 않음)",
+      "검토 화면에 이름 칸을 항상 표시, 비어 있으면 다운로드할 때 한 번 물어봐요 (한 번 입력하면 기억)",
+      "기존 '분류 기록'은 '분류 저장 기록'으로 이름을 바꿔 접힌 칸으로 이동",
+    ],
+  },
+  {
     version: "2.8.0",
     date: "2026-10-16",
     changes: [

@@ -111,6 +111,7 @@ async function recordUsage(
   batchId: string,
   rows: IncomingRow[],
   receipt?: ReceiptStat,
+  who?: { by: string; mode: string },
 ) {
   try {
     const valid = new Set<string>(ALL_CATEGORIES);
@@ -135,6 +136,8 @@ async function recordUsage(
       at: now.toISOString(),
       rows: rows.length,
       amount,
+      ...(who?.by ? { by: who.by } : {}),
+      ...(who?.mode ? { mode: who.mode } : {}),
       ...(receipt ? { receipt } : {}),
     });
   } catch (e) {
@@ -150,6 +153,7 @@ export async function POST(req: NextRequest) {
     let rows: IncomingRow[] = [];
     let batchId = "";
     let receiptStat: ReceiptStat | undefined;
+    let who = { by: "", mode: "" };
     let receiptBytes: Uint8Array | null = null;
 
     const ctype = req.headers.get("content-type") || "";
@@ -172,17 +176,24 @@ export async function POST(req: NextRequest) {
         rows?: IncomingRow[];
         batchId?: string;
         receipt?: unknown;
+        by?: unknown;
+        mode?: unknown;
       };
       rows = Array.isArray(body.rows) ? body.rows : [];
       batchId = typeof body.batchId === "string" ? body.batchId : "";
       receiptStat = cleanReceiptStat(body.receipt);
+      // 이용 기록: 이름(최대 40자)과 분류 방식만 받는다.
+      who = {
+        by: typeof body.by === "string" ? body.by.trim().slice(0, 40) : "",
+        mode: ["both", "pdf", "excel"].includes(String(body.mode)) ? String(body.mode) : "",
+      };
     }
 
     if (!Array.isArray(rows) || rows.length === 0) {
       return NextResponse.json({ error: "No rows provided" }, { status: 400 });
     }
 
-    if (batchId) await recordUsage(batchId, rows, receiptStat);
+    if (batchId) await recordUsage(batchId, rows, receiptStat, who);
 
     const valid = new Set<string>(ALL_CATEGORIES);
     const expenseRows: FormRow[] = [];
