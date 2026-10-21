@@ -10,6 +10,15 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.11.0",
+    date: "2026-10-21",
+    changes: [
+      "🤖 영수증은 이제 기본으로 AI가 읽어요 — 쓰는 모델 이름과 로고가 화면에 표시돼요",
+      "기존 OCR(내 컴퓨터에서 글자 인식)은 '더보기 → OCR로 인식하기'로 옮겼어요",
+      "Expense Tool 새 로고와 브라우저 탭 아이콘",
+    ],
+  },
+  {
     version: "2.10.0",
     date: "2026-10-20",
     changes: [

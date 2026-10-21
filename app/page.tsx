@@ -30,6 +30,7 @@ import type { ParsedReceipts } from "@/lib/parseReceipts";
 import { matchReceipts, type Half, type RowMeta } from "@/lib/buildReceiptPdf";
 import { normalizeMerchant } from "@/lib/normalize";
 import CategoryPicker from "@/components/CategoryPicker";
+import Logo from "@/components/Logo";
 import { getDeviceId } from "@/lib/clientId";
 
 interface Row {
@@ -130,24 +131,33 @@ export default function Home() {
   const [dragOver, setDragOver] = useState(false);
   const [receiptFiles, setReceiptFiles] = useState<File[]>([]);
   const [receiptDragOver, setReceiptDragOver] = useState(false);
-  // "AI로 영수증 읽기" 토글 (기본 꺼짐 = OCR). 브라우저에 기억한다.
-  const [aiReceipt, setAiReceipt] = useState(false);
+  // 영수증 읽는 방법: 기본은 AI, "더보기"에서 OCR 로 바꿀 수 있다. 브라우저에 기억한다.
+  // (예전 'AI 토글' 저장값과 섞이지 않도록 새 키를 쓴다 → 모두 AI 기본으로 시작)
+  const [aiReceipt, setAiReceipt] = useState(true);
+  // 서버의 AI 모델 이름·사용 가능 여부 (키가 없으면 자동으로 OCR)
+  const [aiInfo, setAiInfo] = useState<{ model: string; available: boolean } | null>(null);
   useEffect(() => {
     try {
-      setAiReceipt(localStorage.getItem("expense_tool_ai_receipt") === "1");
+      setAiReceipt(localStorage.getItem("expense_tool_receipt_reader") !== "ocr");
     } catch {
       /* ignore */
     }
+    fetch("/api/ai-info")
+      .then((r) => r.json())
+      .then((d) => setAiInfo({ model: String(d.model || ""), available: !!d.available }))
+      .catch(() => setAiInfo(null));
   }, []);
-  function toggleAiReceipt(on: boolean) {
-    setAiReceipt(on);
+  function setReader(ai: boolean) {
+    setAiReceipt(ai);
     try {
-      localStorage.setItem("expense_tool_ai_receipt", on ? "1" : "0");
+      localStorage.setItem("expense_tool_receipt_reader", ai ? "ai" : "ocr");
     } catch {
       /* ignore */
     }
     resetResults();
   }
+  // 실제로 AI 를 쓰는지: 사용자가 OCR 을 고르지 않았고 서버에 AI 키가 있을 때
+  const useAiReader = aiReceipt && aiInfo?.available !== false;
   const [loading, setLoading] = useState(false);
   const [downloading, setDownloading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -363,7 +373,7 @@ export default function Home() {
 
   async function ensureReceiptsParsed() {
     const key =
-      (aiReceipt ? "ai|" : "ocr|") +
+      (useAiReader ? "ai|" : "ocr|") +
       receiptFiles.map((f) => `${f.name}:${f.size}:${f.lastModified}`).join("|");
     if (receiptCache.current && receiptCache.current.key === key)
       return receiptCache.current;
@@ -372,7 +382,7 @@ export default function Home() {
     );
     const bytes = await mergePdfFiles(receiptFiles);
     const parsed = await parseReceiptsRemote(bytes, setProgress, {
-      useAi: aiReceipt,
+      useAi: useAiReader,
     });
     const entry = { key, bytes, parsed };
     receiptCache.current = entry;
@@ -1091,7 +1101,9 @@ export default function Home() {
     <main style={wrap}>
       <div style={tiny ? { ...card, padding: 20 } : card}>
         <header style={headerRow}>
-          <h1 style={title}>Expense Tool</h1>
+          <h1 style={{ margin: 0 }} aria-label="Expense Tool">
+            <Logo />
+          </h1>
           <nav style={topNav}>
             <a href="/learned" style={topNavLink}>학습 데이터</a>
             <a href="/stats" style={topNavLink}>통계</a>
@@ -1278,34 +1290,48 @@ export default function Home() {
               </div>
             )}
             <div style={readModeBox}>
-              <div style={readModeLabel}>분류 방법 선택</div>
-              <div style={readModeSeg} role="radiogroup" aria-label="영수증 읽는 방법">
-                <button
-                  type="button"
-                  role="radio"
-                  aria-checked={!aiReceipt}
-                  style={!aiReceipt ? segOcrOn : segOff}
-                  onClick={() => aiReceipt && toggleAiReceipt(false)}
-                >
-                  OCR 사용
-                  <span style={segSub}>무료 · 내 컴퓨터에서 처리</span>
-                </button>
-                <button
-                  type="button"
-                  role="radio"
-                  aria-checked={aiReceipt}
-                  style={aiReceipt ? segAiOn : segOff}
-                  onClick={() => !aiReceipt && toggleAiReceipt(true)}
-                >
-                  AI 사용
-                  <span style={segSub}>더 정확 · 1쪽 약 1원</span>
-                </button>
-              </div>
-              <div style={aiReceipt ? readModeHintAi : readModeHintOcr}>
-                {aiReceipt
-                  ? "AI가 읽어요. 처음 보는 양식도 읽고 가맹점명이 더 정확하지만, 영수증 그림이 OpenAI로 전송돼요. 같은 파일을 다시 올리면 저장된 결과를 써서 비용이 들지 않아요."
-                  : "컴퓨터 안에서 글자 인식(OCR)으로 읽어요. 영수증이 밖으로 나가지 않아요. 결과가 이상하면 AI 사용으로 바꿔 보세요."}
-              </div>
+              {useAiReader ? (
+                <div style={readerCardAi}>
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img src="/openai.png" alt="OpenAI" width={22} height={22} style={{ flexShrink: 0 }} />
+                  <div style={{ minWidth: 0 }}>
+                    <div style={readerTitle}>
+                      AI가 영수증을 읽어요
+                      {aiInfo?.model && <span style={modelBadge}>{aiInfo.model}</span>}
+                    </div>
+                    <div style={readerSub}>
+                      스캔·인쇄 PDF와 처음 보는 양식도 읽어요. 영수증 그림은 OpenAI로
+                      전송되고, 같은 파일을 다시 올리면 저장된 결과를 써요.
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <div style={readerCardOcr}>
+                  <span style={ocrMark}>OCR</span>
+                  <div style={{ minWidth: 0 }}>
+                    <div style={readerTitle}>글자 인식(OCR)으로 읽어요</div>
+                    <div style={readerSub}>
+                      {aiInfo && !aiInfo.available
+                        ? "지금은 AI를 쓸 수 없어 OCR로 읽어요 (서버에 AI 키가 없어요)."
+                        : "내 컴퓨터 안에서 처리해서 영수증이 밖으로 나가지 않아요. 결과가 이상하면 AI로 바꿔 보세요."}
+                    </div>
+                  </div>
+                </div>
+              )}
+              <details style={moreBox}>
+                <summary style={moreSummary}>더보기</summary>
+                <label style={moreOption}>
+                  <input
+                    type="checkbox"
+                    checked={!aiReceipt}
+                    onChange={(e) => setReader(!e.target.checked)}
+                  />
+                  <span>
+                    <b>OCR로 인식하기</b> — AI 대신 내 컴퓨터에서 글자 인식으로 읽어요
+                    (무료, 영수증이 밖으로 나가지 않음, 대신 가맹점명이 가끔 틀려요)
+                  </span>
+                </label>
+              </details>
             </div>
           </>
         )}
@@ -2318,6 +2344,67 @@ const versionInline: CSSProperties = {
 };
 const privacyNote: CSSProperties = { width: "100%", fontSize: 11, color: T.textFaint };
 const readModeBox: CSSProperties = { margin: "10px 0 14px" };
+const readerCardBase: CSSProperties = {
+  display: "flex",
+  alignItems: "flex-start",
+  gap: 10,
+  padding: "10px 12px",
+  borderRadius: T.radius,
+  border: "1px solid",
+};
+const readerCardAi: CSSProperties = { ...readerCardBase, borderColor: T.aiBorder, background: T.aiBg };
+const readerCardOcr: CSSProperties = { ...readerCardBase, borderColor: T.ocrBorder, background: T.ocrBg };
+const readerTitle: CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  flexWrap: "wrap",
+  gap: 6,
+  fontSize: 13.5,
+  fontWeight: 700,
+  color: T.text,
+};
+const readerSub: CSSProperties = { fontSize: 12, color: T.textMuted, lineHeight: 1.5, marginTop: 2 };
+const modelBadge: CSSProperties = {
+  fontSize: 11,
+  fontWeight: 700,
+  color: T.ai,
+  background: T.surface,
+  border: `1px solid ${T.aiBorder}`,
+  borderRadius: 999,
+  padding: "1px 8px",
+  fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
+};
+const ocrMark: CSSProperties = {
+  flexShrink: 0,
+  fontSize: 10.5,
+  fontWeight: 800,
+  color: T.surface,
+  background: T.ocr,
+  borderRadius: 6,
+  padding: "4px 5px",
+  letterSpacing: 0.5,
+};
+const moreBox: CSSProperties = { marginTop: 6 };
+const moreSummary: CSSProperties = {
+  cursor: "pointer",
+  fontSize: 12,
+  color: T.textFaint,
+  fontWeight: 600,
+  padding: "2px 0",
+};
+const moreOption: CSSProperties = {
+  display: "flex",
+  alignItems: "flex-start",
+  gap: 8,
+  marginTop: 6,
+  padding: "8px 10px",
+  borderRadius: T.radiusSm,
+  background: T.surfaceAlt,
+  fontSize: 12.5,
+  color: T.textSub,
+  lineHeight: 1.5,
+  cursor: "pointer",
+};
 const readModeLabel: CSSProperties = {
   fontSize: 12,
   fontWeight: 600,
