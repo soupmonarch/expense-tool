@@ -10,6 +10,13 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.12.0",
+    date: "2026-10-22",
+    changes: [
+      "📖 사용 설명서를 웹페이지로 새로 만들었어요 — 실제 화면 사진과 함께 단계별로 안내해요 (PDF 대신 바로 열려요)",
+    ],
+  },
+  {
     version: "2.11.0",
     date: "2026-10-21",
     changes: [

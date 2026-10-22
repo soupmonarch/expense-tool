@@ -1107,9 +1107,7 @@ export default function Home() {
           <nav style={topNav}>
             <a href="/learned" style={topNavLink}>학습 데이터</a>
             <a href="/stats" style={topNavLink}>통계</a>
-            <a href="/manual.pdf" target="_blank" rel="noopener noreferrer" style={topNavLink}>
-              사용 설명서
-            </a>
+            <a href="/guide" style={topNavLink}>사용 설명서</a>
             <a href="/changelog" style={topNavLink}>업데이트</a>
           </nav>
         </header>
