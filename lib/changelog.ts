@@ -10,6 +10,14 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.13.0",
+    date: "2026-10-28",
+    changes: [
+      "📅 검토 화면에 결제 기간과 달별 건수 표시 (예: 8월 99건 · 9월 1건)",
+      "다른 달 결제가 섞여 있으면 경고 + 해당 줄을 노란색으로 표시, '○월만 남기기'로 한 번에 빼기 (되돌리기 가능)",
+    ],
+  },
+  {
     version: "2.12.0",
     date: "2026-10-22",
     changes: [

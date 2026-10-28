@@ -125,6 +125,18 @@ function fmt(n: number): string {
   return (n || 0).toLocaleString("ko-KR");
 }
 
+// 결제일("2026.08.03", "2026-08-03 12:00" 등)에서 결제월 "2026.08" 을 뽑는다. 못 읽으면 "".
+function monthOf(date?: string): string {
+  const m = String(date || "").match(/(20\d{2})[.\-/년\s]*(\d{1,2})/);
+  return m ? `${m[1]}.${m[2].padStart(2, "0")}` : "";
+}
+
+// "2026.08" → "8월" (여러 해가 섞이면 "2025년 12월")
+function monthLabel(m: string, withYear: boolean): string {
+  const [y, mo] = m.split(".");
+  return withYear ? `${y}년 ${Number(mo)}월` : `${Number(mo)}월`;
+}
+
 export default function Home() {
   const [mode, setMode] = useState<"excel" | "pdf" | "both">("both");
   const [files, setFiles] = useState<File[]>([]);
@@ -210,6 +222,10 @@ export default function Home() {
   );
 
   const [finalOpen, setFinalOpen] = useState(false);
+  // 여러 달 결제가 섞였을 때 남길 달("2026.08"). null 이면 모두 포함.
+  // monthAck: '모두 포함'을 눌러 경고를 닫았는지.
+  const [monthOnly, setMonthOnly] = useState<string | null>(null);
+  const [monthAck, setMonthAck] = useState(false);
   // 최종 검토에서 영수증 매칭 결과를 보여 주기 위한 영수증 파싱 결과
   const [receiptParsed, setReceiptParsed] = useState<ParsedReceipts | null>(
     null,
@@ -222,14 +238,41 @@ export default function Home() {
   const [previewLoading, setPreviewLoading] = useState(false);
   const inputRef = useRef<HTMLInputElement | null>(null);
 
+  // 결제월 필터: 날짜를 못 읽은 행은 항상 남긴다.
+  const inMonth = (date?: string) => {
+    if (!monthOnly) return true;
+    const m = monthOf(date);
+    return !m || m === monthOnly;
+  };
+
+  // 결제월별 건수 (여러 달이 섞였는지 확인용). 가장 많은 달이 기준 달.
+  const monthInfo = useMemo(() => {
+    const counts = new Map<string, number>();
+    const dates: string[] = [];
+    for (const r of rows || []) {
+      const m = monthOf(r.date);
+      if (!m) continue;
+      counts.set(m, (counts.get(m) || 0) + 1);
+      dates.push(r.date);
+    }
+    const list = [...counts.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+    const main = [...list].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))[0]?.[0] || "";
+    const withYear = new Set(list.map(([m]) => m.slice(0, 4))).size > 1;
+    dates.sort();
+    return { list, main, withYear, from: dates[0] || "", to: dates[dates.length - 1] || "" };
+  }, [rows]);
+  const mixedMonths = monthInfo.list.length > 1;
+
   const reviewRows = useMemo(
-    () => (rows || []).filter((r) => r.needsReview),
-    [rows],
+    () => (rows || []).filter((r) => r.needsReview && inMonth(r.date)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [rows, monthOnly],
   );
   // AI가 확신을 갖고 분류한 항목(확인 대기). needsReview 항목과 겹치지 않는다.
   const aiRows = useMemo(
-    () => (rows || []).filter((r) => r.aiCheck && !r.needsReview),
-    [rows],
+    () => (rows || []).filter((r) => r.aiCheck && !r.needsReview && inMonth(r.date)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [rows, monthOnly],
   );
 
   const totalUsed = useMemo(
@@ -257,6 +300,8 @@ export default function Home() {
     setFinalOpen(false);
     setReceiptParsed(null);
     setReceiptErr(null);
+    setMonthOnly(null);
+    setMonthAck(false);
   }
 
   // 영수증 PDF 병합/파싱 결과 캐시 (분류하기 → 다운로드에서 재사용).
@@ -320,6 +365,8 @@ export default function Home() {
     if (!resume) return;
     setMode(resume.mode);
     setRows(resume.rows);
+    setMonthOnly(null);
+    setMonthAck(false);
     setStats(resume.stats);
     setCancelQuestions(resume.cancelQuestions || []);
     setCancelChoice(resume.cancelChoice || {});
@@ -447,6 +494,8 @@ export default function Home() {
     setAiDiag(null);
     setRows(null);
     setStats(null);
+    setMonthOnly(null);
+    setMonthAck(false);
     try {
       const fd = new FormData();
       fd.append("mode", mode);
@@ -656,6 +705,7 @@ export default function Home() {
 
     const out: Payload[] = [];
     for (const r of rows || []) {
+      if (!inMonth(r.date)) continue; // '○월만 남기기'로 뺀 다른 달 결제
       const base: Payload = {
         id: r.id,
         source: r.source,
@@ -686,6 +736,7 @@ export default function Home() {
 
     // 고아 환불: 사용자가 '음수로 포함'을 선택한 건만 음수 금액 행으로 추가
     for (const q of orphans) {
+      if (!inMonth(q.cancelDate)) continue;
       if ((cancelChoice[q.id] || "exclude") === "include") {
         out.push({
           date: q.cancelDate || "",
@@ -760,8 +811,12 @@ export default function Home() {
   const finalPayload = finalOpen ? finalizeRows() : [];
   const finalExpense = finalPayload.filter((p) => !isTravelCategory(p.category));
   const finalTravel = finalPayload.filter((p) => isTravelCategory(p.category));
+  // 다른 달이라 뺀 결제 수 (취소·환불 제외 건수와 따로 센다)
+  const monthExcluded = monthOnly ? (rows || []).filter((r) => !inMonth(r.date)).length : 0;
   const finalExcluded =
-    (rows || []).length - finalPayload.filter((p) => p.id !== undefined).length;
+    (rows || []).length -
+    monthExcluded -
+    finalPayload.filter((p) => p.id !== undefined).length;
   const finalUnclassified = finalPayload.filter(
     (p) => !VALID_CATEGORIES.has(p.category),
   ).length;
@@ -925,11 +980,14 @@ export default function Home() {
           const unclassified = !VALID_CATEGORIES.has(p.category);
           const selected = p.id !== undefined && previewId === p.id;
           const clickable = !!group && !!receiptMatch && p.id !== undefined;
+          const pm = monthOf(p.date);
+          const otherMonth = mixedMonths && !monthOnly && !!pm && pm !== monthInfo.main;
           return (
             <div
               key={p.id !== undefined ? "r" + p.id : "o" + i}
               style={{
                 ...(unclassified ? finalRowWarn : finalRow),
+                ...(otherMonth && !unclassified ? finalRowOtherMonth : null),
                 ...(clickable ? { cursor: "pointer" } : null),
                 ...(selected ? finalRowSelected : null),
               }}
@@ -944,6 +1002,11 @@ export default function Home() {
                 </span>
                 <span style={listAmount}>{fmt(p.amount)}원</span>
               </div>
+              {otherMonth && (
+                <div style={otherMonthText}>
+                  📅 {monthLabel(pm, monthInfo.withYear)} 결제 — 다른 달이에요
+                </div>
+              )}
               {matched && (
                 <div style={matched[i] ? receiptOk : receiptMissingText}>
                   {matched[i]
@@ -1541,6 +1604,28 @@ export default function Home() {
                     ? ` · 취소·환불로 제외 ${fmt(finalExcluded)}건`
                     : ""}
                 </div>
+                {monthInfo.from && (
+                  <div>
+                    📅 기간 {monthInfo.from.slice(0, 10)} ~ {monthInfo.to.slice(0, 10)}
+                    {" · "}
+                    {monthInfo.list.map(([m, n], i) => (
+                      <span key={m}>
+                        {i > 0 ? " · " : ""}
+                        <span
+                          style={
+                            mixedMonths && m === (monthOnly || monthInfo.main)
+                              ? { fontWeight: 700 }
+                              : monthOnly && m !== monthOnly
+                                ? { textDecoration: "line-through", color: T.textFaint }
+                                : undefined
+                          }
+                        >
+                          {monthLabel(m, monthInfo.withYear)} {fmt(n)}건
+                        </span>
+                      </span>
+                    ))}
+                  </div>
+                )}
                 {hasReceipts && receiptLoading && (
                   <div style={mutedText}>
                     🧾 {progress || "영수증 PDF 분석 중… 잠시만요"}
@@ -1557,6 +1642,38 @@ export default function Home() {
                   </div>
                 )}
               </div>
+              {mixedMonths && !monthOnly && !monthAck && (
+                <div style={monthBox}>
+                  <div>
+                    ⚠️ <b>다른 달 결제가 섞여 있어요.</b>{" "}
+                    {monthInfo.list
+                      .filter(([m]) => m !== monthInfo.main)
+                      .map(([m, n]) => `${monthLabel(m, monthInfo.withYear)} ${fmt(n)}건`)
+                      .join(" · ")}
+                    이 {monthLabel(monthInfo.main, monthInfo.withYear)} 내역과 함께 들어 있어요. 아래 목록에
+                    노란색으로 표시했어요.
+                  </div>
+                  <div style={monthBtns}>
+                    <button style={monthBtnPrimary} onClick={() => setMonthOnly(monthInfo.main)}>
+                      {monthLabel(monthInfo.main, monthInfo.withYear)}만 남기기
+                    </button>
+                    <button style={monthBtn} onClick={() => setMonthAck(true)}>
+                      모두 포함
+                    </button>
+                  </div>
+                </div>
+              )}
+              {monthOnly && monthExcluded > 0 && (
+                <div style={monthInfoBox}>
+                  <span>
+                    📅 {monthLabel(monthOnly, monthInfo.withYear)} 결제만 남겼어요 — 다른 달{" "}
+                    {fmt(monthExcluded)}건은 엑셀과 영수증 PDF에서 빠져요.
+                  </span>
+                  <button style={monthBtn} onClick={() => setMonthOnly(null)}>
+                    되돌리기
+                  </button>
+                </div>
+              )}
               {hasReceipts && receiptErr && (
                 <div style={finalWarnBox}>
                   ⚠️ 영수증 분석 실패 — {receiptErr}
@@ -2146,6 +2263,46 @@ const finalWarnBox: CSSProperties = {
   lineHeight: 1.5,
   marginBottom: 8,
 };
+// 여러 달이 섞였을 때 경고 / 한 달만 남겼을 때 안내
+const monthBox: CSSProperties = {
+  padding: "10px 12px",
+  borderRadius: 8,
+  background: T.warningBg,
+  border: `1px solid ${T.warningBorder}`,
+  color: T.warningText,
+  fontSize: 12.5,
+  lineHeight: 1.6,
+  marginBottom: 8,
+};
+const monthInfoBox: CSSProperties = {
+  ...monthBox,
+  background: T.primaryBg,
+  border: `1px solid ${T.primaryBorder}`,
+  color: T.textSub,
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "space-between",
+  gap: 10,
+};
+const monthBtns: CSSProperties = { display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap" };
+const monthBtn: CSSProperties = {
+  padding: "5px 12px",
+  borderRadius: 6,
+  border: `1px solid ${T.border}`,
+  background: T.surface,
+  color: T.textSub,
+  fontSize: 12.5,
+  fontWeight: 600,
+  cursor: "pointer",
+  flexShrink: 0,
+};
+const monthBtnPrimary: CSSProperties = {
+  ...monthBtn,
+  background: T.primary,
+  borderColor: T.primary,
+  color: "#fff",
+};
+const otherMonthText: CSSProperties = { fontSize: 12, color: T.warningText, fontWeight: 600 };
 const finalSection: CSSProperties = { marginTop: 12 };
 const receiptOk: CSSProperties = { fontSize: 11.5, color: T.success };
 const receiptMissingText: CSSProperties = {
@@ -2191,6 +2348,11 @@ const finalRowWarn: CSSProperties = {
   ...finalRow,
   background: T.dangerBgSoft,
   borderLeft: `3px solid ${T.dangerStrong}`,
+  paddingLeft: 6,
+};
+const finalRowOtherMonth: CSSProperties = {
+  background: T.warningBg,
+  borderLeft: `3px solid ${T.warning}`,
   paddingLeft: 6,
 };
 const finalRowTop: CSSProperties = {
