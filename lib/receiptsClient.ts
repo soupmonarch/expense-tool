@@ -289,6 +289,48 @@ export function receiptStats(
   };
 }
 
+// 실험실(통신비 추가): 개인 카드로 낸 통신비 영수증을 Expense_Receipts.pdf 맨 뒤에 붙인다.
+// 엑셀에서도 통신비 행이 Expense 맨 아래에 들어가므로 순서가 맞는다.
+// PDF는 모든 페이지를, 사진(JPG/PNG)은 A4 한 장에 맞춰 넣는다.
+export async function appendExtraReceipts(
+  zipBlob: Blob,
+  files: File[],
+  reportLine: string,
+): Promise<Blob> {
+  const zip = await JSZip.loadAsync(zipBlob);
+  const existing = zip.file("Expense_Receipts.pdf");
+  const out = existing
+    ? await PDFDocument.load(await existing.async("uint8array"))
+    : await PDFDocument.create();
+  for (const f of files) {
+    const bytes = new Uint8Array(await f.arrayBuffer());
+    if (f.type === "application/pdf" || /\.pdf$/i.test(f.name)) {
+      const src = await PDFDocument.load(bytes, { ignoreEncryption: true });
+      const pages = await out.copyPages(src, src.getPageIndices());
+      for (const pg of pages) out.addPage(pg);
+    } else {
+      const img =
+        f.type === "image/png" || /\.png$/i.test(f.name)
+          ? await out.embedPng(bytes)
+          : await out.embedJpg(bytes);
+      const W = 595.28, H = 841.89, M = 28; // A4 (pt), 여백
+      const s = Math.min((W - 2 * M) / img.width, (H - 2 * M) / img.height);
+      const page = out.addPage([W, H]);
+      page.drawImage(img, {
+        x: (W - img.width * s) / 2,
+        y: (H - img.height * s) / 2,
+        width: img.width * s,
+        height: img.height * s,
+      });
+    }
+  }
+  zip.file("Expense_Receipts.pdf", await out.save());
+  const rep = zip.file("영수증_리포트.txt");
+  const prev = rep ? await rep.async("string") : "";
+  zip.file("영수증_리포트.txt", (prev ? prev + "\n\n" : "") + reportLine);
+  return await zip.generateAsync({ type: "blob" });
+}
+
 // 서버가 만든 엑셀 ZIP 에 영수증 PDF 2개(Expense/Travel, 엑셀 행 순서와 동일)와
 // 리포트를 추가한다.
 export async function attachReceiptsToZip(

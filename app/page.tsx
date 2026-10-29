@@ -20,6 +20,7 @@ import {
   type Category,
 } from "@/lib/categories";
 import {
+  appendExtraReceipts,
   attachReceiptsToZip,
   mergePdfFiles,
   parseReceiptsRemote,
@@ -107,6 +108,16 @@ interface Payload {
   source?: string; // 분류 방식 (사용 통계용)
 }
 
+// 실험실: 개인 카드로 낸 통신비 영수증 1건 (검토 화면에서 직접 추가)
+interface PhoneItem {
+  key: string;
+  file: File;
+  date: string; // input[type=date] 값 "2026-09-30"
+  merchant: string;
+  amount: string;
+}
+const PHONE_CATEGORY = "KR-TELEPHONE EXPENSES";
+
 const VALID_CATEGORIES = new Set<string>(ALL_CATEGORIES);
 
 // /api/generate 와 같은 규칙: 유효한 Travel 분류만 Travel 파일, 나머지(미분류 포함)는 Expense.
@@ -148,9 +159,14 @@ export default function Home() {
   const [aiReceipt, setAiReceipt] = useState(true);
   // 서버의 AI 모델 이름·사용 가능 여부 (키가 없으면 자동으로 OCR)
   const [aiInfo, setAiInfo] = useState<{ model: string; available: boolean } | null>(null);
+  // 실험실: 통신비 추가하기 (더보기에서 켜면 검토 화면에 '통신비 추가' 칸이 생긴다)
+  const [labPhone, setLabPhone] = useState(false);
+  const [phoneItems, setPhoneItems] = useState<PhoneItem[]>([]);
+  const phoneInputRef = useRef<HTMLInputElement | null>(null);
   useEffect(() => {
     try {
       setAiReceipt(localStorage.getItem("expense_tool_receipt_reader") !== "ocr");
+      setLabPhone(localStorage.getItem("expense_tool_lab_phone") === "1");
     } catch {
       /* ignore */
     }
@@ -168,6 +184,45 @@ export default function Home() {
     }
     resetResults();
   }
+  function setLab(on: boolean) {
+    setLabPhone(on);
+    try {
+      localStorage.setItem("expense_tool_lab_phone", on ? "1" : "0");
+    } catch {
+      /* ignore */
+    }
+  }
+  function addPhoneFiles(list: FileList | null) {
+    const ok = Array.from(list || []).filter((f) =>
+      /\.(pdf|jpe?g|png)$/i.test(f.name),
+    );
+    setPhoneItems((prev) => [
+      ...prev,
+      ...ok.map((file) => ({
+        key: Math.random().toString(36).slice(2),
+        file,
+        date: "",
+        merchant: "통신비",
+        amount: "",
+      })),
+    ]);
+  }
+  function setPhoneField(key: string, field: "date" | "merchant" | "amount", value: string) {
+    setPhoneItems((prev) => prev.map((p) => (p.key === key ? { ...p, [field]: value } : p)));
+  }
+  // 엑셀에 넣을 통신비 행: 금액을 적은 것만. Expense 맨 아래에 붙는다.
+  const phoneReady = labPhone
+    ? phoneItems.filter((p) => Number(p.amount.replace(/[^0-9]/g, "")) > 0)
+    : [];
+  const phoneRows: Payload[] = phoneReady.map((p) => ({
+    date: p.date.replace(/-/g, "."),
+    merchant: p.merchant.trim() || "통신비",
+    amount: Number(p.amount.replace(/[^0-9]/g, "")),
+    currency: "KRW",
+    category: PHONE_CATEGORY,
+    approval: "",
+    source: "manual",
+  }));
   // 실제로 AI 를 쓰는지: 사용자가 OCR 을 고르지 않았고 서버에 AI 키가 있을 때
   const useAiReader = aiReceipt && aiInfo?.available !== false;
   const [loading, setLoading] = useState(false);
@@ -770,7 +825,15 @@ export default function Home() {
       const res = await fetch("/api/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ rows: payload, batchId, receipt, by, mode, device: getDeviceId() }),
+        // 실험실 통신비 행은 맨 뒤에 붙여 Expense 엑셀 맨 아래로 간다(영수증 매칭에는 넣지 않음).
+        body: JSON.stringify({
+          rows: [...payload, ...phoneRows],
+          batchId,
+          receipt,
+          by,
+          mode,
+          device: getDeviceId(),
+        }),
       });
       if (!res.ok) {
         let msg = `Failed (${res.status})`;
@@ -786,6 +849,14 @@ export default function Home() {
       if (rc) {
         setProgress("영수증 PDF 자르기·정렬 중…");
         blob = await attachReceiptsToZip(blob, payload, rc.bytes, rc.parsed);
+      }
+      if (phoneReady.length > 0) {
+        setProgress("통신비 영수증 붙이는 중…");
+        blob = await appendExtraReceipts(
+          blob,
+          phoneReady.map((p) => p.file),
+          `통신비(개인카드) 영수증 ${phoneReady.length}건을 Expense 엑셀 맨 아래 행과 Expense_Receipts.pdf 맨 뒤에 추가했습니다.`,
+        );
       }
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
@@ -1392,6 +1463,18 @@ export default function Home() {
                     (무료, 영수증이 밖으로 나가지 않음, 대신 가맹점명이 가끔 틀려요)
                   </span>
                 </label>
+                <div style={labTitle}>🧪 실험실 기능</div>
+                <label style={moreOption}>
+                  <input
+                    type="checkbox"
+                    checked={labPhone}
+                    onChange={(e) => setLab(e.target.checked)}
+                  />
+                  <span>
+                    <b>통신비 추가하기</b> — 개인 카드로 낸 통신비 영수증을 검토 화면에서 추가하면
+                    Expense 통신비로 엑셀 맨 아래와 영수증 PDF 맨 뒤에 함께 넣어 줘요
+                  </span>
+                </label>
               </details>
             </div>
           </>
@@ -1598,8 +1681,14 @@ export default function Home() {
                   ✈️ Travel {fmt(finalTravel.length)}건 ·{" "}
                   {fmt(sumAmount(finalTravel))}원
                 </div>
+                {phoneRows.length > 0 && (
+                  <div>
+                    📱 통신비(개인카드) {fmt(phoneRows.length)}건 · {fmt(sumAmount(phoneRows))}원
+                    <span style={{ color: T.textMuted }}> (Expense 맨 아래)</span>
+                  </div>
+                )}
                 <div>
-                  💳 합계 <b>{fmt(sumAmount(finalPayload))}원</b>
+                  💳 합계 <b>{fmt(sumAmount(finalPayload) + sumAmount(phoneRows))}원</b>
                   {finalExcluded > 0
                     ? ` · 취소·환불로 제외 ${fmt(finalExcluded)}건`
                     : ""}
@@ -1860,6 +1949,80 @@ export default function Home() {
                 receiptMatch?.travel.rowMatched,
                 "travel",
               )}
+              {labPhone && (
+                <div style={phoneBox}>
+                  <div style={phoneHead}>
+                    <span>📱 통신비 추가 (개인카드)</span>
+                    <span style={labBadge}>실험실</span>
+                  </div>
+                  <div style={phoneHint}>
+                    개인 카드로 낸 통신비 영수증(PDF·JPG·PNG)을 올리고 날짜·금액을 적어 주세요. Expense
+                    통신비(TELEPHONE EXPENSES)로 엑셀 맨 아래에 들어가고, 영수증은 Expense 영수증 PDF 맨 뒤에
+                    붙어요. 금액이 비어 있으면 빠져요.
+                  </div>
+                  {phoneItems.map((p) => {
+                    const empty = !(Number(p.amount.replace(/[^0-9]/g, "")) > 0);
+                    return (
+                      <div key={p.key} style={phoneItem}>
+                        <div style={phoneFileRow}>
+                          <span style={phoneFileName}>🧾 {p.file.name}</span>
+                          <button
+                            type="button"
+                            style={phoneRemove}
+                            aria-label="삭제"
+                            onClick={() => setPhoneItems((prev) => prev.filter((x) => x.key !== p.key))}
+                          >
+                            ✕
+                          </button>
+                        </div>
+                        <div style={phoneFields}>
+                          <input
+                            type="date"
+                            style={{ ...manualInput, flex: "0 0 150px" }}
+                            value={p.date}
+                            onChange={(e) => setPhoneField(p.key, "date", e.target.value)}
+                          />
+                          <input
+                            style={{ ...manualInput, flex: 1, minWidth: 120 }}
+                            placeholder="사용처 (예: SKT 9월 통신비)"
+                            value={p.merchant}
+                            onChange={(e) => setPhoneField(p.key, "merchant", e.target.value)}
+                          />
+                          <input
+                            style={{
+                              ...manualInput,
+                              flex: "0 0 120px",
+                              ...(empty ? { borderColor: T.dangerBorder, background: T.dangerBgSoft } : null),
+                            }}
+                            inputMode="numeric"
+                            placeholder="금액 (원)"
+                            value={p.amount}
+                            onChange={(e) => setPhoneField(p.key, "amount", e.target.value)}
+                          />
+                        </div>
+                      </div>
+                    );
+                  })}
+                  <input
+                    ref={phoneInputRef}
+                    type="file"
+                    accept=".pdf,.jpg,.jpeg,.png"
+                    multiple
+                    style={{ display: "none" }}
+                    onChange={(e) => {
+                      addPhoneFiles(e.target.files);
+                      e.target.value = "";
+                    }}
+                  />
+                  <button
+                    type="button"
+                    style={phoneAddBtn}
+                    onClick={() => phoneInputRef.current?.click()}
+                  >
+                    + 통신비 영수증 추가
+                  </button>
+                </div>
+              )}
             </div>
             {receiptMatch && !narrow && renderPreviewPanel(false)}
             </div>
@@ -1894,7 +2057,9 @@ export default function Home() {
               >
                 {mode !== "excel" && receiptFiles.length > 0
                   ? "확인 완료 · 다운로드 (엑셀 2 + 영수증 PDF 2)"
-                  : "확인 완료 · 엑셀 다운로드"}
+                  : phoneReady.length > 0
+                    ? "확인 완료 · 다운로드 (엑셀 2 + 통신비 영수증)"
+                    : "확인 완료 · 엑셀 다운로드"}
               </button>
             </div>
           </div>
@@ -2303,6 +2468,74 @@ const monthBtnPrimary: CSSProperties = {
   color: "#fff",
 };
 const otherMonthText: CSSProperties = { fontSize: 12, color: T.warningText, fontWeight: 600 };
+// 실험실: 통신비 추가
+const labTitle: CSSProperties = {
+  fontSize: 12,
+  fontWeight: 700,
+  color: T.textMuted,
+  margin: "12px 0 4px",
+};
+const labBadge: CSSProperties = {
+  fontSize: 11,
+  fontWeight: 700,
+  color: T.ai,
+  background: T.aiBg,
+  border: `1px solid ${T.aiBorder}`,
+  borderRadius: 6,
+  padding: "1px 6px",
+};
+const phoneBox: CSSProperties = {
+  marginTop: 14,
+  padding: 12,
+  borderRadius: 10,
+  border: `1px dashed ${T.borderStrong}`,
+  background: T.surfaceAlt,
+};
+const phoneHead: CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 8,
+  fontSize: 14,
+  fontWeight: 700,
+  color: T.text,
+};
+const phoneHint: CSSProperties = { fontSize: 12, color: T.textMuted, lineHeight: 1.6, margin: "6px 0 10px" };
+const phoneItem: CSSProperties = {
+  background: T.surface,
+  border: `1px solid ${T.border}`,
+  borderRadius: 8,
+  padding: "8px 10px",
+  marginBottom: 8,
+};
+const phoneFileRow: CSSProperties = { display: "flex", alignItems: "center", gap: 8, marginBottom: 6 };
+const phoneFileName: CSSProperties = {
+  flex: 1,
+  minWidth: 0,
+  fontSize: 12.5,
+  color: T.textSub,
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+  whiteSpace: "nowrap",
+};
+const phoneRemove: CSSProperties = {
+  border: "none",
+  background: "transparent",
+  color: T.textFaint,
+  cursor: "pointer",
+  fontSize: 14,
+};
+const phoneFields: CSSProperties = { display: "flex", gap: 6, flexWrap: "wrap" };
+const phoneAddBtn: CSSProperties = {
+  width: "100%",
+  padding: "9px 12px",
+  borderRadius: 8,
+  border: `1px solid ${T.primaryBorder}`,
+  background: T.primaryBg,
+  color: T.primary,
+  fontSize: 13,
+  fontWeight: 700,
+  cursor: "pointer",
+};
 const finalSection: CSSProperties = { marginTop: 12 };
 const receiptOk: CSSProperties = { fontSize: 11.5, color: T.success };
 const receiptMissingText: CSSProperties = {

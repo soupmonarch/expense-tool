@@ -10,6 +10,13 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.14.0",
+    date: "2026-10-29",
+    changes: [
+      "🧪 실험실 기능 '통신비 추가하기' (첫 화면 더보기에서 켜기) — 개인 카드로 낸 통신비 영수증(PDF·JPG·PNG)을 검토 화면에서 올리고 날짜·금액을 적으면 Expense 통신비로 엑셀 맨 아래와 영수증 PDF 맨 뒤에 함께 들어가요",
+    ],
+  },
+  {
     version: "2.13.0",
     date: "2026-10-28",
     changes: [
