@@ -159,14 +159,12 @@ export default function Home() {
   const [aiReceipt, setAiReceipt] = useState(true);
   // 서버의 AI 모델 이름·사용 가능 여부 (키가 없으면 자동으로 OCR)
   const [aiInfo, setAiInfo] = useState<{ model: string; available: boolean } | null>(null);
-  // 실험실: 통신비 추가하기 (더보기에서 켜면 검토 화면에 '통신비 추가' 칸이 생긴다)
-  const [labPhone, setLabPhone] = useState(false);
+  // 실험실: 통신비 추가 (검토 화면 맨 아래 '통신비 추가' 칸)
   const [phoneItems, setPhoneItems] = useState<PhoneItem[]>([]);
   const phoneInputRef = useRef<HTMLInputElement | null>(null);
   useEffect(() => {
     try {
       setAiReceipt(localStorage.getItem("expense_tool_receipt_reader") !== "ocr");
-      setLabPhone(localStorage.getItem("expense_tool_lab_phone") === "1");
     } catch {
       /* ignore */
     }
@@ -183,14 +181,6 @@ export default function Home() {
       /* ignore */
     }
     resetResults();
-  }
-  function setLab(on: boolean) {
-    setLabPhone(on);
-    try {
-      localStorage.setItem("expense_tool_lab_phone", on ? "1" : "0");
-    } catch {
-      /* ignore */
-    }
   }
   function addPhoneFiles(list: FileList | null) {
     const ok = Array.from(list || []).filter((f) =>
@@ -211,9 +201,7 @@ export default function Home() {
     setPhoneItems((prev) => prev.map((p) => (p.key === key ? { ...p, [field]: value } : p)));
   }
   // 엑셀에 넣을 통신비 행: 금액을 적은 것만. Expense 맨 아래에 붙는다.
-  const phoneReady = labPhone
-    ? phoneItems.filter((p) => Number(p.amount.replace(/[^0-9]/g, "")) > 0)
-    : [];
+  const phoneReady = phoneItems.filter((p) => Number(p.amount.replace(/[^0-9]/g, "")) > 0);
   const phoneRows: Payload[] = phoneReady.map((p) => ({
     date: p.date.replace(/-/g, "."),
     merchant: p.merchant.trim() || "통신비",
@@ -685,21 +673,29 @@ export default function Home() {
     });
   }
 
-  // 이용 기록에 남길 이름. 비어 있으면 한 번 물어보고 브라우저에 기억한다.
-  function ensureUserName(): string {
-    let name = userName.trim();
-    if (!name) {
-      name = (window.prompt("이용 기록에 남길 이름을 입력해 주세요.") || "").trim().slice(0, 40);
-      if (name) setUserName(name);
-    }
-    if (name) {
+  // 이용 기록에 남길 이름. 비어 있으면 다운로드 전에 이름 창(우리 화면)을 한 번 띄운다.
+  // 건너뛰면 이름 없이(익명) 기록된다. 적은 이름은 브라우저에 기억한다.
+  const [nameAsk, setNameAsk] = useState(false);
+  const [nameDraft, setNameDraft] = useState("");
+  async function confirmDownload(name: string) {
+    const by = name.trim().slice(0, 40);
+    if (by) {
+      setUserName(by);
       try {
-        localStorage.setItem("expense_tool_user_name", name);
+        localStorage.setItem("expense_tool_user_name", by);
       } catch {
         /* ignore */
       }
     }
-    return name;
+    setNameAsk(false);
+    await saveLearning(by); // 체크된 분류를 모두에게 저장
+    setFinalOpen(false);
+    download(by);
+  }
+  function onDownloadClick() {
+    if (userName.trim()) return confirmDownload(userName);
+    setNameDraft("");
+    setNameAsk(true);
   }
 
   // 검토 화면에서 "다운로드"를 누를 때 학습할 항목을 공유 저장소에 저장한다.
@@ -1463,18 +1459,6 @@ export default function Home() {
                     (무료, 영수증이 밖으로 나가지 않음, 대신 가맹점명이 가끔 틀려요)
                   </span>
                 </label>
-                <div style={labTitle}>🧪 실험실 기능</div>
-                <label style={moreOption}>
-                  <input
-                    type="checkbox"
-                    checked={labPhone}
-                    onChange={(e) => setLab(e.target.checked)}
-                  />
-                  <span>
-                    <b>통신비 추가하기</b> — 개인 카드로 낸 통신비 영수증을 검토 화면에서 추가하면
-                    Expense 통신비로 엑셀 맨 아래와 영수증 PDF 맨 뒤에 함께 넣어 줘요
-                  </span>
-                </label>
               </details>
             </div>
           </>
@@ -1949,7 +1933,7 @@ export default function Home() {
                 receiptMatch?.travel.rowMatched,
                 "travel",
               )}
-              {labPhone && (
+              {
                 <div style={phoneBox}>
                   <div style={phoneHead}>
                     <span>📱 통신비 추가 (개인카드)</span>
@@ -2022,7 +2006,7 @@ export default function Home() {
                     + 통신비 영수증 추가
                   </button>
                 </div>
-              )}
+              }
             </div>
             {receiptMatch && !narrow && renderPreviewPanel(false)}
             </div>
@@ -2048,12 +2032,7 @@ export default function Home() {
                 type="button"
                 style={downloading || receiptLoading ? primaryBtnDisabled : primaryBtn}
                 disabled={downloading || receiptLoading}
-                onClick={async () => {
-                  const by = ensureUserName(); // 이용 기록에 남을 이름 (비어 있으면 한 번 물어봄)
-                  await saveLearning(by); // 체크된 분류를 모두에게 저장
-                  setFinalOpen(false);
-                  download(by);
-                }}
+                onClick={onDownloadClick}
               >
                 {mode !== "excel" && receiptFiles.length > 0
                   ? "확인 완료 · 다운로드 (엑셀 2 + 영수증 PDF 2)"
@@ -2065,9 +2044,68 @@ export default function Home() {
           </div>
         </div>
       )}
+
+      {nameAsk && (
+        <div style={{ ...overlay, zIndex: 60 }} onClick={() => setNameAsk(false)}>
+          <form
+            style={nameDialog}
+            onClick={(e) => e.stopPropagation()}
+            onSubmit={(e) => {
+              e.preventDefault();
+              confirmDownload(nameDraft);
+            }}
+          >
+            <h2 style={modalTitle}>이름을 적어 주세요</h2>
+            <p style={modalSub}>
+              이용 기록에 남을 이름이에요. 한 번 적으면 이 브라우저가 기억해서 다음부터는 묻지 않아요.
+            </p>
+            <input
+              autoFocus
+              style={nameDialogInput}
+              placeholder="예: 홍길동"
+              maxLength={40}
+              value={nameDraft}
+              onChange={(e) => setNameDraft(e.target.value)}
+            />
+            <div style={nameDialogNote}>건너뛰면 이름 없이 <b>익명</b>으로 기록돼요.</div>
+            <div style={{ ...modalActions, marginTop: 16 }}>
+              <button type="button" style={ghostBtn} onClick={() => confirmDownload("")}>
+                익명으로 진행
+              </button>
+              <button
+                type="submit"
+                style={nameDraft.trim() ? primaryBtn : primaryBtnDisabled}
+                disabled={!nameDraft.trim()}
+              >
+                확인 · 다운로드
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
     </main>
   );
 }
+
+// 다운로드 전 이름 창
+const nameDialog: CSSProperties = {
+  width: "100%",
+  maxWidth: 420,
+  background: T.surface,
+  borderRadius: 14,
+  padding: 24,
+  boxShadow: T.shadowModal,
+};
+const nameDialogInput: CSSProperties = {
+  width: "100%",
+  boxSizing: "border-box",
+  padding: "10px 12px",
+  fontSize: 15,
+  border: `1px solid ${T.border}`,
+  borderRadius: T.radiusSm,
+  outline: "none",
+};
+const nameDialogNote: CSSProperties = { fontSize: 12.5, color: T.textMuted, marginTop: 8 };
 
 const wrap: CSSProperties = {
   minHeight: "100vh",
@@ -2469,12 +2507,6 @@ const monthBtnPrimary: CSSProperties = {
 };
 const otherMonthText: CSSProperties = { fontSize: 12, color: T.warningText, fontWeight: 600 };
 // 실험실: 통신비 추가
-const labTitle: CSSProperties = {
-  fontSize: 12,
-  fontWeight: 700,
-  color: T.textMuted,
-  margin: "12px 0 4px",
-};
 const labBadge: CSSProperties = {
   fontSize: 11,
   fontWeight: 700,
